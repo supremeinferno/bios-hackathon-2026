@@ -7,7 +7,7 @@ tracking gets PS1-level effort because it is 30/100 for every PS and the tie-bre
 |---|---|---|---|
 | M0 | H0–1 | **Phase 0: spec and data** | `SPEC.md`, `docs/DATA_REPORT.md`, `.gitignore` in place ✅ |
 | M1 | H1–3 | **Thin end-to-end path** | `src/egovision/` skeleton with typed config; ingest with a cached, strided decode; MediaPipe hands → `hands.jsonl`; Gemini whole-clip → `actions.csv`; overlay video; 10-second smoke test passing; first commit |
-| M2 | H3–6 | **Measure it (MVP)** | Labelling tool (hand boxes + side; action segments); ~120 labelled hand frames + ≥2 held-out action clips; `scripts/evaluate.py` gives baseline numbers. **This is the MVP: video in, PS3 file out, validation score.** |
+| M2 | H3–6 | **Measure it (MVP)** | Labelling tool (hand boxes + side; action segments); ~120 labelled hand frames + ≥2 held-out action clips; `egovision eval` gives baseline numbers. **This is the MVP: video in, PS3 file out, validation score.** |
 | M3 | H6–11 | **Hand tracking quality** | Compare ≥2 hand stacks on our labelled frames (MediaPipe full-frame vs. detector→crop→landmarks cascade, e.g. RTMDet/RTMPose-hand via rtmlib or a YOLO hand detector; resolution; fisheye undistortion on/off). Add: own-hand filter (rejects coworker hands and feet), IoU/Hungarian tracking with stable IDs, L/R swap fix, One-Euro smoothing, gap interpolation. Report recall/precision/L-R accuracy/ID switches/FPS per variant in `docs/DECISIONS.md` |
 | M4 | H11–15 | **Task-step quality (PS3 bonuses)** | Contact and grab/release events (hands + open-vocab objects on keyframes); boundary refinement from those events; per-window VLM labelling with the fixed verb list; temporal clean-up (min length, merge, per-hand overlap rules); per-source step template giving missing/out-of-order/repeated steps and worker comparison; offline path measured; ablations |
 | M5 | H15–19 | **Product layer + full run** | CLI (`run`, `batch`, `eval`), FastAPI job service, dashboard (video + overlays + synced timeline + stats), docker-compose; batch over all 40 clips; per-stage throughput table |
@@ -29,6 +29,6 @@ tracking gets PS1-level effort because it is 30/100 for every PS and the tie-bre
 
 - *Supervised temporal model (MS-TCN/ASFormer)*: needs labels, and there are none. We use the
   zero/few-shot branch the brief describes for that case.
-- *Official metric*: none exists (judged by a panel). `evaluate.py` uses our own disclosed
+- *Official metric*: none exists (judged by a panel). `egovision eval` uses our own disclosed
   labels.
 - *Frame gallery in repo docs*: forbidden by the data rules; galleries go in the private slides only.

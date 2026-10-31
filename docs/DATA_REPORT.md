@@ -152,6 +152,10 @@ yellow hand-held tool; cloth/rag for wiping; **company signage readable** in 006
 **There are no labels.** Nothing to parse, so there are no class/step counts. In place of a label
 summary, the action vocabulary we expect from what is visible:
 
+> **Update (2026-11-01):** the organisers still provide no labels, but `labels/` now holds our own
+> draft action labels for three clips (two held-out, one dev), not yet checked by a person. See
+> [labels/README.md](../labels/README.md) for provenance and splits.
+
 | source | likely verbs | likely objects |
 |---|---|---|
 | SGF00106 | pick, place, hold, align, fasten (nail/drill), plane/sand, cut, carry, inspect | plywood frame, plywood panel/template, wooden strip, drill/nail gun, planer/sander, jigsaw |
