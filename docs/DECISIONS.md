@@ -29,3 +29,28 @@ raw labels are already correct for our non-mirrored head-camera video. `swap_han
 ## D5 — Ingest decodes with PyAV, not OpenCV (Block 1)
 Same clip, decode + scale to 960x540: PyAV (threaded decode, swscale resize in `to_ndarray`)
 357 fps vs OpenCV 5.0 (`read` + `cv2.resize`) 106 fps. PyAV also gives exact frame timestamps.
+
+## D6 — Verb list frozen at 17 verbs; `press` added (Block 1)
+The PDF lists `press` among example verbs (p.13); our Phase 0 draft dropped it. While drafting
+validation labels, the stone-plant worker repeatedly operates a hand-held hoist remote, which
+no other verb describes. `press` was added before any predictions were scored. The `hand truck`
+vocabulary entry and the `hand tool -> press/adjust` cue were added at the same time; both
+objects were already noted in dev clips (DATA_REPORT §3, 000060-009 and -011).
+
+## D7 — Our own labels: provenance and splits (Block 2)
+No labels exist (PDF p.1). See `labels/README.md`. Held-out for reporting: `mytronlabs-000060-016`
+(0-180 s) and `MTL-SKL00089-007` (0-60 s). Dev for the improvement pass: `mytronlabs-000060-010`
+(0-60 s). Labels were drafted by Claude Code from 1 fps frame sheets and are NOT human-verified;
+every score in RESULTS.md says so.
+
+## D8 — Open-vocabulary detector: OWLv2 base, threshold 0.2 (Block 1)
+Same 8 keyframes (2 per source), same per-source prompts, RTX 3050 4 GB, fp16, batch 1:
+
+| model | speed | peak VRAM | what we saw |
+|---|---|---|---|
+| `google/owlv2-base-patch16-ensemble` | **7.4 img/s** | 0.42 GB | held tools found (drill 0.63, planer in hand ~0.2, cloth 0.49-0.52, tape rolls); many low-score boxes 0.15-0.25; misses big surfaces (granite slab 0.21) |
+| `IDEA-Research/grounding-dino-tiny` | 2.1 img/s | 1.06 GB | finds slab (0.43), end caps (0.59), profiles; but labels from text spans often land on the wrong box ("hand truck", "metal bar" everywhere) |
+
+OWLv2 chosen: 3.5x faster and its per-prompt scores are cleaner. Threshold raised 0.15 -> 0.2
+to cut the noise floor. Licence: Apache-2.0 for both. Grounding DINO stays selectable via
+`objects.model`.

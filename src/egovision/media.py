@@ -51,5 +51,6 @@ def write_video(frames: Iterable[np.ndarray], out: str | Path, fps: float, bitra
 
 def transcode(src: str, out: str | Path, width: int, fps: float, max_frames: int | None = None) -> str:
     """Downscale a clip (video only) for API upload, optionally keeping only the first frames."""
-    frames = (img for i, img in iter_all_frames(src, width) if max_frames is None or i < max_frames)
+    last = None if max_frames is None else max_frames - 1
+    frames = (img for _, img in iter_all_frames(src, width, last))
     return write_video(frames, out, fps, bitrate=1_200_000)

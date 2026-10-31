@@ -1,0 +1,15 @@
+clip,start_s,end_s,verb,object,hand
+MTL-SKL00089-007,0.0,7.5,attach,tape,both
+MTL-SKL00089-007,7.5,9.5,place,circuit board,left
+MTL-SKL00089-007,9.5,11.5,pick,circuit board,both
+MTL-SKL00089-007,11.5,17.5,attach,circuit board,both
+MTL-SKL00089-007,17.5,24.5,attach,tape,both
+MTL-SKL00089-007,24.5,27.5,hold,circuit board,both
+MTL-SKL00089-007,27.5,32.5,inspect,circuit board,both
+MTL-SKL00089-007,32.5,39.5,attach,tape,both
+MTL-SKL00089-007,39.5,41.5,adjust,circuit board,both
+MTL-SKL00089-007,41.5,43.5,place,circuit board,right
+MTL-SKL00089-007,43.5,45.5,pick,circuit board,right
+MTL-SKL00089-007,45.5,51.5,attach,circuit board,both
+MTL-SKL00089-007,52.5,55.5,attach,tape,both
+MTL-SKL00089-007,55.5,60.0,adjust,circuit board,both

@@ -1,0 +1,21 @@
+clip,start_s,end_s,verb,object,hand
+mytronlabs-000060-016,0.0,12.5,wipe,granite slab,right
+mytronlabs-000060-016,0.0,12.5,hold,granite slab,left
+mytronlabs-000060-016,21.5,23.0,press,hoist controller,right
+mytronlabs-000060-016,27.5,30.0,press,hoist controller,right
+mytronlabs-000060-016,31.5,36.5,carry,metal bar,right
+mytronlabs-000060-016,40.5,42.5,hold,granite slab,right
+mytronlabs-000060-016,46.5,47.5,press,hoist controller,right
+mytronlabs-000060-016,53.5,54.5,push,granite slab,right
+mytronlabs-000060-016,60.0,70.5,push,granite slab,both
+mytronlabs-000060-016,71.5,75.5,place,granite slab,both
+mytronlabs-000060-016,80.5,85.5,wipe,granite slab,right
+mytronlabs-000060-016,88.5,90.5,push,hand truck,right
+mytronlabs-000060-016,94.5,99.5,push,granite slab,right
+mytronlabs-000060-016,101.5,104.5,hold,metal bar,right
+mytronlabs-000060-016,108.5,114.5,push,hand truck,both
+mytronlabs-000060-016,140.5,141.5,pick,cloth,both
+mytronlabs-000060-016,141.5,164.0,wipe,granite slab,right
+mytronlabs-000060-016,147.5,163.5,hold,granite slab,left
+mytronlabs-000060-016,168.5,171.5,press,hoist controller,right
+mytronlabs-000060-016,174.5,180.0,press,hoist controller,right

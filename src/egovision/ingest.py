@@ -1,8 +1,8 @@
 """Video ingest: probing, strided decoding and an on-disk frame cache.
 
-Measured on our laptop (docs/DECISIONS.md D3): decode-only 163 fps, decode+convert+resize 57 fps,
-random seek ~280 ms. So we `grab()` every frame (cheap), `retrieve()` only the frames we keep,
-never seek in the hot path, and cache the kept, resized frames as JPEG for re-runs.
+Decoding uses PyAV with threaded decode and swscale resizing, measured at 357 fps versus 106 fps
+for OpenCV on our 1080p HEVC clips (docs/DECISIONS.md D5). Every frame is decoded (HEVC cannot
+skip), but only kept frames are converted. Kept, resized frames are cached as JPEG for re-runs.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+import av
 import cv2
 import numpy as np
 
@@ -35,38 +36,71 @@ class Frame:
     scale: float  # processing width / original width
 
 
+def _open(path: str | Path) -> av.container.InputContainer:
+    try:
+        c = av.open(str(path))
+    except (av.error.FFmpegError, OSError) as e:
+        raise VideoError(f"cannot open video (corrupt or unsupported): {path}: {e}") from e
+    if not c.streams.video:
+        c.close()
+        raise VideoError(f"no video stream in {path}")
+    return c
+
+
 def probe(path: str | Path, min_duration_s: float = 0.0) -> VideoMeta:
     p = Path(path)
     if not p.is_file():
         raise VideoError(f"video not found: {p}")
-    cap = cv2.VideoCapture(str(p))
+    c = _open(p)
     try:
-        if not cap.isOpened():
-            raise VideoError(f"cannot open video (corrupt or unsupported codec): {p}")
-        fps = float(cap.get(cv2.CAP_PROP_FPS))
-        n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        cc = int(cap.get(cv2.CAP_PROP_FOURCC))
-        ok, _ = cap.read()
+        s = c.streams.video[0]
+        rate = s.average_rate or s.base_rate
+        fps = float(rate) if rate else 0.0
+        if s.duration and s.time_base:
+            duration = float(s.duration * s.time_base)
+        else:
+            duration = (c.duration or 0) / 1e6
+        n = s.frames or int(round(duration * fps))
+        w, h, codec = s.codec_context.width, s.codec_context.height, s.codec_context.name
+        try:
+            next(c.decode(s))
+        except (StopIteration, av.error.FFmpegError) as e:
+            raise VideoError(f"first frame does not decode: {p}") from e
     finally:
-        cap.release()
-    if not ok:
-        raise VideoError(f"first frame does not decode: {p}")
+        c.close()
     if fps <= 0 or n <= 0 or w <= 0 or h <= 0:
         raise VideoError(f"invalid stream metadata (fps={fps}, frames={n}, size={w}x{h}): {p}")
     duration = n / fps
     if duration < min_duration_s:
         raise VideoError(f"video too short ({duration:.2f}s < {min_duration_s}s): {p}")
-    codec = "".join(chr((cc >> (8 * i)) & 0xFF) for i in range(4)).strip("\x00")
     return VideoMeta(path=str(p), name=p.stem, width=w, height=h, fps=fps, n_frames=n,
                      duration_s=round(duration, 3), codec=codec)
 
 
-def _proc_size(meta: VideoMeta, width: int) -> tuple[int, int]:
+def proc_size(meta: VideoMeta, width: int) -> tuple[int, int]:
     if width <= 0 or width >= meta.width:
         return meta.width, meta.height
     return width, int(round(meta.height * width / meta.width / 2) * 2)
+
+
+def decode_frames(path: str, size: tuple[int, int] | None = None, keep: set[int] | None = None,
+                  last: int | None = None) -> Iterator[tuple[int, np.ndarray]]:
+    """Yield (index, BGR image) for decoded frames; convert only indices in `keep` (all if None)."""
+    c = _open(path)
+    try:
+        s = c.streams.video[0]
+        s.thread_type = "AUTO"
+        kw = {"width": size[0], "height": size[1], "interpolation": "AREA"} if size else {}
+        i = -1
+        for i, f in enumerate(c.decode(s)):
+            if last is not None and i > last:
+                break
+            if keep is None or i in keep:
+                yield i, f.to_ndarray(format="bgr24", **kw)
+    except av.error.FFmpegError as e:
+        log.warning("ingest: decode error after frame %d of %s: %s (stopping)", i, path, e)
+    finally:
+        c.close()
 
 
 class FrameSource:
@@ -75,7 +109,7 @@ class FrameSource:
     def __init__(self, meta: VideoMeta, cfg: IngestConfig):
         self.meta = meta
         self.cfg = cfg
-        self.size = _proc_size(meta, cfg.width)
+        self.size = proc_size(meta, cfg.width)
         self.scale = self.size[0] / meta.width
         last = meta.n_frames
         if cfg.max_seconds is not None:
@@ -97,6 +131,21 @@ class FrameSource:
         else:
             yield from self._decode()
 
+    def load(self, indices: list[int]) -> Iterator[Frame]:
+        """Specific frames (in order): from the cache when complete, else by decoding."""
+        if not indices:
+            return
+        d = self.cache_path
+        if self.cfg.cache_frames and (d / "manifest.json").is_file():
+            for i in indices:
+                img = cv2.imread(str(d / f"{i:06d}.jpg"), cv2.IMREAD_COLOR)
+                if img is not None:
+                    yield Frame(i, i / self.meta.fps, img, self.scale)
+            return
+        size = None if self.size == (self.meta.width, self.meta.height) else self.size
+        for i, img in decode_frames(self.meta.path, size, set(indices), max(indices)):
+            yield Frame(i, i / self.meta.fps, img, self.scale)
+
     def _from_cache(self) -> Iterator[Frame]:
         d = self.cache_path
         manifest = json.loads((d / "manifest.json").read_text())
@@ -108,57 +157,34 @@ class FrameSource:
             yield Frame(i, i / self.meta.fps, img, self.scale)
 
     def _decode(self) -> Iterator[Frame]:
-        cap = cv2.VideoCapture(self.meta.path)
-        if not cap.isOpened():
-            raise VideoError(f"cannot open video: {self.meta.path}")
         write = self.cfg.cache_frames
         d = self.cache_path
         if write:
             d.mkdir(parents=True, exist_ok=True)
-        wanted = set(self.indices)
+        size = None if self.size == (self.meta.width, self.meta.height) else self.size
         last = self.indices[-1] if self.indices else -1
         got: list[int] = []
         params = [cv2.IMWRITE_JPEG_QUALITY, self.cfg.jpeg_quality]
-        try:
-            i = 0
-            while i <= last:
-                if not cap.grab():
-                    log.warning("ingest: stream ended early at frame %d of %d", i, self.meta.n_frames)
-                    break
-                if i in wanted:
-                    ok, img = cap.retrieve()
-                    if not ok:
-                        log.warning("ingest: frame %d failed to decode; skipped", i)
-                    else:
-                        if self.size != (self.meta.width, self.meta.height):
-                            img = cv2.resize(img, self.size, interpolation=cv2.INTER_AREA)
-                        if write:
-                            cv2.imwrite(str(d / f"{i:06d}.jpg"), img, params)
-                        got.append(i)
-                        yield Frame(i, i / self.meta.fps, img, self.scale)
-                i += 1
-        finally:
-            cap.release()
+        for i, img in decode_frames(self.meta.path, size, set(self.indices), last):
+            if write:
+                cv2.imwrite(str(d / f"{i:06d}.jpg"), img, params)
+            got.append(i)
+            yield Frame(i, i / self.meta.fps, img, self.scale)
+        if len(got) < len(self.indices):
+            log.warning("ingest: got %d of %d expected frames from %s", len(got), len(self.indices), self.meta.name)
         if write and got:
             # Written last, so an interrupted run never leaves a cache that looks complete.
             (d / "manifest.json").write_text(json.dumps({"indices": got, "size": self.size}))
 
 
-def iter_all_frames(path: str, width: int | None = None) -> Iterator[tuple[int, np.ndarray]]:
-    """Every frame in order (for rendering). Optionally resized to `width`."""
-    cap = cv2.VideoCapture(path)
-    if not cap.isOpened():
-        raise VideoError(f"cannot open video: {path}")
-    try:
-        i = 0
-        while True:
-            ok, img = cap.read()
-            if not ok:
-                break
-            if width and img.shape[1] != width:
-                h = int(round(img.shape[0] * width / img.shape[1] / 2) * 2)
-                img = cv2.resize(img, (width, h), interpolation=cv2.INTER_AREA)
-            yield i, img
-            i += 1
-    finally:
-        cap.release()
+def iter_all_frames(path: str, width: int | None = None, last: int | None = None) -> Iterator[tuple[int, np.ndarray]]:
+    """Every frame in order (for rendering), optionally resized to `width`."""
+    size = None
+    if width:
+        c = _open(path)
+        cc = c.streams.video[0].codec_context
+        w, h = cc.width, cc.height
+        c.close()
+        if w != width:
+            size = (width, int(round(h * width / w / 2) * 2))
+    yield from decode_frames(path, size, None, last)

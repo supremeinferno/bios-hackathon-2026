@@ -12,10 +12,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from egovision.actions.postprocess import from_raw
-from egovision.config import ActionsConfig
+from egovision.config import StepsConfig
 from egovision.media import transcode
-from egovision.schema import Action, FrameHands, VideoMeta
+from egovision.schema import Action, ContactSegment, FrameHands, VideoMeta
+from egovision.steps.features import KeyframeFeatures
+from egovision.steps.postprocess import from_raw
 
 log = logging.getLogger(__name__)
 
@@ -39,10 +40,11 @@ the same hand must not overlap; prefer short precise actions over one long vague
 "other" only when no verb fits. Output only the JSON array."""
 
 
-class GeminiActions:
+class GeminiSteps:
     name = "gemini"
+    needs_embeddings = False
 
-    def __init__(self, cfg: ActionsConfig):
+    def __init__(self, cfg: StepsConfig):
         key = os.environ.get(cfg.api_key_env)
         if not key:
             raise RuntimeError(f"{cfg.api_key_env} is not set; create a key in Google AI Studio and export it")
@@ -59,7 +61,8 @@ class GeminiActions:
         ).hexdigest()[:16]
         return self.cfg.cache_dir / meta.name / f"gemini_{h}.json"
 
-    def segment(self, meta: VideoMeta, hands: list[FrameHands]) -> list[Action]:
+    def segment(self, meta: VideoMeta, hands: list[FrameHands], keyframes: list[KeyframeFeatures],
+                contacts: list[ContactSegment]) -> list[Action]:
         prompt = build_prompt(self.cfg.verbs, meta.duration_s)
         cache = self._cache_file(meta, prompt)
         if cache.is_file():

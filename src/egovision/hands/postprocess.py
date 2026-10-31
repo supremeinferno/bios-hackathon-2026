@@ -1,26 +1,8 @@
-"""Temporal post-processing of per-frame hands: identity assignment and gap filling.
-
-M1 baseline: identity = side (one left track, one right track; duplicates of a side keep the
-higher score). Real tracking, swap fixing and smoothing arrive in M3.
-"""
+"""Gap filling: one FrameHands per source frame from the strided, tracked detections."""
 
 from __future__ import annotations
 
 from egovision.schema import FrameHands, Hand
-
-SIDE_ID = {"left": 0, "right": 1}
-
-
-def assign_side_ids(frames: list[FrameHands]) -> list[FrameHands]:
-    out = []
-    for fh in frames:
-        best: dict[str, Hand] = {}
-        for h in fh.hands:
-            if h.side not in best or h.score > best[h.side].score:
-                best[h.side] = h
-        hands = [h.model_copy(update={"id": SIDE_ID[s]}) for s, h in sorted(best.items())]
-        out.append(FrameHands(frame=fh.frame, t=fh.t, hands=hands))
-    return out
 
 
 def _lerp(a: list[float], b: list[float], w: float) -> list[float]:

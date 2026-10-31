@@ -56,6 +56,48 @@ class FrameHands(BaseModel):
     hands: list[Hand] = Field(default_factory=list)
 
 
+ContactState = Literal["none", "portable", "fixed"]
+CONTACTS_CSV_COLUMNS = ["clip", "t_start", "t_end", "hand", "state", "object_name"]
+
+
+class ObjectDet(BaseModel):
+    label: str
+    kind: Literal["portable", "fixed"]
+    score: float = Field(ge=0, le=1)
+    bbox: list[float]  # original pixels
+
+
+class Contact(BaseModel):
+    """What one tracked hand touches at one keyframe (PS2 definition, PDF p.4)."""
+
+    hand_id: int
+    side: Side
+    state: ContactState
+    object: str | None = None
+    object_bbox: list[float] | None = None
+    object_score: float | None = None
+    n_tips: int = 0  # fingertips inside the padded object box
+
+
+class FrameObjects(BaseModel):
+    frame: int
+    t: float
+    objects: list[ObjectDet] = Field(default_factory=list)
+    contacts: list[Contact] = Field(default_factory=list)
+
+
+class ContactSegment(BaseModel):
+    clip: str
+    t_start: float
+    t_end: float
+    hand: Side
+    state: ContactState
+    object_name: str
+
+    def csv_row(self) -> list[str]:
+        return [self.clip, f"{self.t_start:.2f}", f"{self.t_end:.2f}", self.hand, self.state, self.object_name]
+
+
 class Action(BaseModel):
     clip: str
     start_s: float = Field(ge=0)

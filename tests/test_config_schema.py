@@ -8,11 +8,11 @@ from egovision.schema import ACTIONS_CSV_COLUMNS, Action, Hand
 
 
 def test_defaults_and_overrides():
-    cfg = Config.load(None, ["ingest.stride=3", "hands.swap_handedness=false", "actions.backend=offline"])
+    cfg = Config.load(None, ["ingest.stride=3", "hands.swap_handedness=false", "steps.backend=gemini"])
     assert cfg.ingest.stride == 3
     assert cfg.hands.swap_handedness is False
-    assert cfg.actions.backend == "offline"
-    assert cfg.actions.verbs == DEFAULT_VERBS and "other" in cfg.actions.verbs
+    assert cfg.steps.backend == "gemini"
+    assert cfg.steps.verbs == DEFAULT_VERBS and "other" in cfg.steps.verbs
 
 
 def test_unknown_config_key_rejected():

@@ -1,7 +1,8 @@
-"""Overlay renderer: hand skeletons/boxes on every frame plus a step timeline strip below."""
+"""Overlay renderer: hands (boxes, skeleton, ID), held objects, current step, and a step timeline."""
 
 from __future__ import annotations
 
+import bisect
 import colorsys
 from collections.abc import Iterator
 from pathlib import Path
@@ -13,9 +14,10 @@ from egovision.config import RenderConfig
 from egovision.hands import HAND_CONNECTIONS
 from egovision.ingest import iter_all_frames
 from egovision.media import write_video
-from egovision.schema import Action, FrameHands, VideoMeta
+from egovision.schema import Action, FrameHands, FrameObjects, VideoMeta
 
 SIDE_COLOR = {"left": (80, 220, 80), "right": (0, 150, 255)}  # BGR
+OBJ_COLOR = (255, 200, 60)
 
 
 def verb_colors(verbs: list[str]) -> dict[str, tuple[int, int, int]]:
@@ -27,53 +29,76 @@ def verb_colors(verbs: list[str]) -> dict[str, tuple[int, int, int]]:
     return out
 
 
-def _timeline(actions: list[Action], duration: float, w: int, h: int, colors: dict) -> np.ndarray:
+def _text(img: np.ndarray, s: str, org: tuple[int, int], col: tuple[int, int, int], scale: float = 0.55) -> None:
+    cv2.putText(img, s, org, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 4, cv2.LINE_AA)
+    cv2.putText(img, s, org, cv2.FONT_HERSHEY_SIMPLEX, scale, col, 1, cv2.LINE_AA)
+
+
+def timeline_image(actions: list[Action], duration: float, w: int, h: int, colors: dict) -> np.ndarray:
     """Two lanes: left hand on top, right hand below; 'both'/'none' span both lanes."""
     img = np.full((h, w, 3), 30, np.uint8)
     lane = h // 2
     for a in actions:
-        x1, x2 = int(a.start_s / duration * w), max(int(a.end_s / duration * w), int(a.start_s / duration * w) + 1)
+        x1 = int(a.start_s / duration * w)
+        x2 = max(int(a.end_s / duration * w), x1 + 1)
         y1, y2 = {"left": (0, lane), "right": (lane, h)}.get(a.hand, (0, h))
         cv2.rectangle(img, (x1, y1 + 1), (x2, y2 - 1), colors.get(a.verb, (150, 150, 150)), -1)
-    cv2.putText(img, "L", (2, lane - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220, 220, 220), 1)
-    cv2.putText(img, "R", (2, h - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220, 220, 220), 1)
+    cv2.line(img, (0, lane), (w, lane), (60, 60, 60), 1)
+    _text(img, "L", (3, lane - 8), (230, 230, 230), 0.45)
+    _text(img, "R", (3, h - 8), (230, 230, 230), 0.45)
     return img
 
 
-def _draw_hands(img: np.ndarray, fh: FrameHands, s: float, cfg: RenderConfig) -> None:
+def draw_frame(img: np.ndarray, fh: FrameHands, fo: FrameObjects | None, now: list[Action], t: float,
+               s: float, cfg: RenderConfig) -> None:
+    held = {c.hand_id: c for c in fo.contacts} if fo else {}
+    if fo and cfg.draw_objects:
+        for o in fo.objects:
+            x1, y1, x2, y2 = (int(v * s) for v in o.bbox)
+            cv2.rectangle(img, (x1, y1), (x2, y2), OBJ_COLOR, 1)
+            _text(img, f"{o.label} {o.score:.2f}", (x1 + 2, y2 - 4), OBJ_COLOR, 0.4)
     for hand in fh.hands:
         col = SIDE_COLOR[hand.side]
         thick = 1 if hand.interp else 2
         kp = [(int(x * s), int(y * s)) for x, y in hand.kp2d]
+        x1, y1, x2, y2 = (int(v * s) for v in hand.bbox)
         if cfg.draw_bbox:
-            x1, y1, x2, y2 = (int(v * s) for v in hand.bbox)
             cv2.rectangle(img, (x1, y1), (x2, y2), col, thick)
-            tag = f"{hand.side[0].upper()}{'' if hand.id is None else hand.id} {hand.score:.2f}"
-            cv2.putText(img, tag, (x1, max(12, y1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 2)
         if cfg.draw_keypoints:
             for a, b in HAND_CONNECTIONS:
                 cv2.line(img, kp[a], kp[b], col, thick, cv2.LINE_AA)
             for p in kp:
                 cv2.circle(img, p, 2, (255, 255, 255), -1)
+        tag = f"{hand.side[0].upper()}{'' if hand.id is None else hand.id} {hand.score:.2f}"
+        c = held.get(hand.id) if hand.id is not None else None
+        if c is not None and c.state != "none":
+            tag += f" | {'holds' if c.state == 'portable' else 'touches'} {c.object}"
+            if c.object_bbox is not None:
+                ox1, oy1, ox2, oy2 = (int(v * s) for v in c.object_bbox)
+                cv2.rectangle(img, (ox1, oy1), (ox2, oy2), col, 2)
+        _text(img, tag, (x1, max(14, y1 - 6)), col)
+    label = "  |  ".join(f"{a.hand}: {a.verb} {a.object}" for a in now) or "-"
+    _text(img, f"{t:6.2f}s  {label}", (8, 24), (255, 255, 255), 0.6)
 
 
-def render_overlay(meta: VideoMeta, hands: list[FrameHands], actions: list[Action], verbs: list[str],
-                   cfg: RenderConfig, out: Path) -> str:
+def render_overlay(meta: VideoMeta, hands: list[FrameHands], objects: list[FrameObjects], actions: list[Action],
+                   verbs: list[str], cfg: RenderConfig, out: Path, start_frame: int = 0,
+                   end_frame: int | None = None) -> str:
     colors = verb_colors(verbs)
     s = cfg.width / meta.width
     duration = len(hands) / meta.fps if hands else meta.duration_s
-    tl = _timeline(actions, duration, cfg.width, cfg.timeline_height, colors) if cfg.timeline_height else None
+    tl = timeline_image(actions, duration, cfg.width, cfg.timeline_height, colors) if cfg.timeline_height else None
+    key_frames = [fo.frame for fo in objects]
+    last = min(len(hands), end_frame if end_frame is not None else len(hands)) - 1
 
     def frames() -> Iterator[np.ndarray]:
-        for i, img in iter_all_frames(meta.path, cfg.width):
-            if i >= len(hands):
-                break
+        for i, img in iter_all_frames(meta.path, cfg.width, last):
+            if i < start_frame:
+                continue
             t = i / meta.fps
-            _draw_hands(img, hands[i], s, cfg)
-            now = [a for a in actions if a.start_s <= t < a.end_s]
-            label = "  |  ".join(f"{a.hand}: {a.verb} {a.object}" for a in now) or "-"
-            cv2.putText(img, f"{t:6.2f}s  {label}", (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4)
-            cv2.putText(img, f"{t:6.2f}s  {label}", (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+            j = bisect.bisect_right(key_frames, i) - 1
+            fo = objects[j] if j >= 0 else None
+            draw_frame(img, hands[i], fo, [a for a in actions if a.start_s <= t < a.end_s], t, s, cfg)
             if tl is not None:
                 strip = tl.copy()
                 x = int(t / duration * cfg.width)
