@@ -1,5 +1,5 @@
-"""Stage 1 privacy sanitization (FORGE): a pixelated copy of the clip with people's heads,
-signage/logos/text, screens and documents hidden, and the wearer's hands kept visible.
+"""Stage 1 privacy sanitization (FORGE): a pixelated copy of the clip with people's faces (heads)
+and company names (signs, logos) hidden, and the wearer's hands kept visible.
 
 Detections come from the shared OWLv2 keyframe pass (prompts in `PrivacyConfig.prompts`). Rules:
   * 'person' boxes become head bands (top `person_head_frac`), because OWLv2 finds people far

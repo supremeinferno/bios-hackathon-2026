@@ -29,19 +29,24 @@ from egovision.schema import (
 )
 
 
-def _hand_dict(h: Hand) -> dict[str, Any]:
+def _hand_dict(h: Hand, width: int | None = None, height: int | None = None) -> dict[str, Any]:
     d = h.model_dump()
+    if width and height:  # FORGE Stage 4: wrist position in camera-origin coordinates
+        from egovision.signals import to_camera_xy
+
+        d["xy_cam"] = [round(v, 4) for v in to_camera_xy(h.kp2d[0][0], h.kp2d[0][1], width, height)]
     d["bbox"] = [round(v, 1) for v in d["bbox"]]
     d["kp2d"] = [[round(x, 1), round(y, 1)] for x, y in d["kp2d"]]
     d["score"] = round(d["score"], 3)
     return d
 
 
-def write_hands_jsonl(frames: list[FrameHands], path: Path) -> None:
+def write_hands_jsonl(frames: list[FrameHands], path: Path, width: int | None = None,
+                      height: int | None = None) -> None:
     with open(path, "w", encoding="utf-8") as f:
         for fh in frames:
             f.write(json.dumps({"frame": fh.frame, "t": round(fh.t, 3),
-                                "hands": [_hand_dict(h) for h in fh.hands]}) + "\n")
+                                "hands": [_hand_dict(h, width, height) for h in fh.hands]}) + "\n")
 
 
 def read_hands_jsonl(path: Path) -> list[FrameHands]:
@@ -65,6 +70,21 @@ def read_actions_csv(path: Path) -> list[Action]:
         raise ValueError(f"{path}: missing columns {sorted(missing)}")
     return [Action(clip=r["clip"], start_s=float(r["start_s"]), end_s=float(r["end_s"]), verb=r["verb"].strip(),
                    object=r["object"].strip(), hand=r["hand"].strip()) for r in rows]  # type: ignore[arg-type]
+
+
+def write_signals_csv(rows: list[dict[str, Any]], path: Path) -> None:
+    """Stage 4 signals at ~10 Hz in camera-origin coordinates (frame: camera)."""
+    from egovision.signals import SIGNAL_COLUMNS
+
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=SIGNAL_COLUMNS, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+
+
+def read_signals_csv(path: Path) -> list[dict[str, str]]:
+    with open(path, encoding="utf-8") as f:
+        return list(csv.DictReader(f))
 
 
 def write_contacts_csv(contacts: list[ContactSegment], path: Path) -> None:
@@ -101,7 +121,7 @@ def load_result(out_dir: Path) -> dict[str, Any]:
 def write_outputs(out_dir: Path, meta: VideoMeta, hands: list[FrameHands], objects: list[FrameObjects],
                   contacts: list[ContactSegment], actions: list[Action], keyframes: list[Any],
                   sanitized: Path | None = None) -> None:
-    write_hands_jsonl(hands, out_dir / "hands.jsonl")
+    write_hands_jsonl(hands, out_dir / "hands.jsonl", meta.width, meta.height)
     write_actions_csv(actions, out_dir / "actions.csv")
     write_contacts_csv(contacts, out_dir / "contacts.csv")
     write_actions_json(actions, out_dir / "actions.json")

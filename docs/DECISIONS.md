@@ -76,3 +76,18 @@ Per-category breakdown of the first privacy run showed heads dominate and 15% st
 below 70% of frame height; pad 20% -> 10%; person head band 35% -> 25%; heads/faces as ellipses;
 hold +/-0.5 s -> +/-0.35 s. Mean pixelated area (when blurring), first 40 s: SGF-021 15.3% -> 3.1%,
 000060-006 12.5% -> 8.7%. Checked frames: coworker faces still covered. See ERRORS_AND_FIXES #19.
+
+## D11 — Privacy limited to faces and company names (Stage 1)
+User decision: blur only faces and company names. Removed the `text`, `document`, `screen` and
+`monitor` prompts, which matched tools and parts (printed templates, tape rolls, shiny metal parts).
+Kept: `person` (as head band), `head`, `face`, `sign`, `logo`. Check on SGF-023, first 30 s:
+regions = 64 heads, 2 faces, 3 signs; mean pixelated area 6.5% of the frame when blurring;
+the nail gun, printed template and planer are no longer pixelated.
+Trade-off: company names on small printed items are only caught if OWLv2 reads them as a sign or
+logo; OCR with a company-name list would close that gap.
+
+## D13 — Gemini: offline always runs; model 3.8-flash with fallbacks (Stage 5)
+`gemini-3.5-flash` (from the PDF) returned 503 overload on two runs; `gemini-2.5-flash` is listed for
+our key but 404s ("not available to new users", recommends 3.8-flash). Main model `gemini-3.8-flash`,
+fallbacks 3.7 -> 3.5 -> flash-latest, 300 s timeout, 4xx not retried. The offline exemplar matcher
+always runs and is used when Gemini fails, so a VLM outage never loses a run.

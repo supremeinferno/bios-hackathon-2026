@@ -60,6 +60,16 @@ tbody tr { cursor: pointer; } tbody tr:hover { background: var(--panel2); } tr.n
 .note { color: var(--muted); font-size: 12px; margin: 8px 0; }
 .kv { display: grid; grid-template-columns: 220px 1fr; gap: 4px 12px; }
 .kv div:nth-child(odd) { color: var(--muted); }
+.st { padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+.st-verified { background: #1f4d2b; color: #7ee28f; } .st-corrected { background: #4d3d12; color: #f2c14e; }
+.st-unverified { background: #4d2a12; color: #ff9f5a; } .st-rejected { background: #4d1717; color: #ff7b72; }
+.st-approved { background: #12324a; color: #4cc2ff; } .st-edited { background: #2e2350; color: #b8a6ff; }
+.flags { color: var(--muted); font-size: 11px; }
+.rv button { padding: 3px 8px; margin-right: 3px; font-size: 12px; }
+.rvhead { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.rvhead input { width: 160px; padding: 5px 8px; background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; }
+.bars div { display: grid; grid-template-columns: 120px 1fr 60px; gap: 8px; align-items: center; font-size: 12px; margin: 3px 0; }
+.bars i { display: block; height: 10px; border-radius: 3px; }
 .dl { display: inline-block; margin: 4px 8px 4px 0; padding: 7px 12px; border-radius: 6px; background: var(--panel2); border: 1px solid var(--line); color: var(--text); text-decoration: none; }
 .dl.main { background: var(--accent); color: #001522; border: none; font-weight: 600; }
 @media (max-width: 1000px) { .layout { grid-template-columns: 1fr; } .side .card { position: static; } }

@@ -20,7 +20,7 @@ weights/
 docs/problem_statement.pdf
 
 # Pipeline outputs are derived from the company footage: keep them out of the public repo
-outputs/
+outputs*/
 labels/*.local.*
 *.egg-info/
 

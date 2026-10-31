@@ -37,7 +37,7 @@ def fill_gaps(processed: list[FrameHands], n_frames: int, fps: float, max_gap: i
                 if b is None:
                     continue
                 hands.append(Hand(
-                    id=a.id, side=a.side, score=min(a.score, b.score), interp=True,
+                    id=a.id, side=a.side, score=min(a.score, b.score), interp=True, source="interpolated",
                     bbox=_lerp(a.bbox, b.bbox, w),
                     kp2d=[_lerp(p, q, w) for p, q in zip(a.kp2d, b.kp2d, strict=True)],
                 ))

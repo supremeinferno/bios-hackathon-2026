@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 import typer
 
@@ -13,9 +13,9 @@ from egovision.config import Config
 
 app = typer.Typer(add_completion=False, help="Egocentric factory video -> hand tracks, contacts and a task-step timeline.")
 
-ConfigOpt = Annotated[Optional[Path], typer.Option("--config", "-c", help="YAML config file.")]  # noqa: UP007
+ConfigOpt = Annotated[Path | None, typer.Option("--config", "-c", help="YAML config file.")]  # noqa: UP007
 SetOpt = Annotated[list[str], typer.Option("--set", "-s", help="Override, e.g. --set ingest.stride=3")]
-MaxSecOpt = Annotated[Optional[float], typer.Option(help="Only process the first N seconds")]  # noqa: UP007
+MaxSecOpt = Annotated[float | None, typer.Option(help="Only process the first N seconds")]  # noqa: UP007
 
 
 @app.callback()
@@ -106,7 +106,7 @@ def batch(
 def eval_(
     pred: Annotated[Path, typer.Option(help="Output root with <clip>/actions.csv")] = Path("outputs"),
     labels: Annotated[Path, typer.Option(help="Folder with <clip>.actions.csv and hands_judged.csv")] = Path("labels"),
-    json_out: Annotated[Optional[Path], typer.Option("--json")] = Path("outputs/eval_report.json"),  # noqa: UP007
+    json_out: Annotated[Path | None, typer.Option("--json")] = Path("outputs/eval_report.json"),  # noqa: UP007
 ) -> None:
     """Score predictions against our labels (see labels/README.md for how they were made)."""
     from egovision.evaluate import evaluate_dir, format_report
@@ -116,6 +116,54 @@ def eval_(
     if json_out:
         json_out.parent.mkdir(parents=True, exist_ok=True)
         json_out.write_text(json.dumps(rep, indent=1), encoding="utf-8")
+
+
+@app.command()
+def sop(
+    out: Annotated[Path, typer.Option("--out", "-o", help="Output root with <clip>/result.json")] = Path("outputs"),
+    config: ConfigOpt = None,
+    set_: SetOpt = [],  # noqa: B006
+) -> None:
+    """Stage 8: discover a step template per source and flag missing / out-of-order / repeated steps."""
+    from egovision.sop import run_sop
+
+    rep = run_sop(out, _load(config, set_, None).sop)
+    for src, r in rep.items():
+        typer.echo(f"{src}: {r['clips']} clips, template {[t['key'] for t in r['template']]}")
+        for clip, chk in r["per_clip"].items():
+            typer.echo(f"  {clip}: completeness {chk['completeness']} missing {chk['missing']} "
+                       f"out_of_order {chk['out_of_order']} repeated {chk['repeated']}")
+    typer.echo(f"written to {out / 'sop'}/ and <clip>/steps_check.json")
+
+
+@app.command()
+def trim(
+    clip: Annotated[str, typer.Option("--clip", help="Clip name (results in OUT/<clip>/)")],
+    out: Annotated[Path, typer.Option("--out", "-o")] = Path("outputs"),
+    force: Annotated[bool, typer.Option(help="Trim without a reviewer's approve_trim decision")] = False,
+    config: ConfigOpt = None,
+    set_: SetOpt = [],  # noqa: B006
+    verbose: bool = False,
+) -> None:
+    """Stage 10: smooth trim + compress the sanitized copy (needs the reviewer's trim approval)."""
+    _setup_logging(verbose)
+    from egovision.export import load_result
+    from egovision.review import apply_review, load_log
+    from egovision.trim import run_trim
+
+    cfg = _load(config, set_, None)
+    d = out / clip
+    r = load_result(d)
+    log = load_log(d)
+    if cfg.trim.require_approval and not force and not any(x.op == "approve_trim" for x in log):
+        typer.echo("refused: the trim plan has not been approved in review (or pass --force)")
+        raise typer.Exit(code=2)
+    if not r["sanitized"] or not Path(r["sanitized"]).is_file():
+        typer.echo("refused: no sanitized copy (trimming only ever works on the sanitized video)")
+        raise typer.Exit(code=2)
+    info = run_trim(d, Path(r["sanitized"]), Path(r["meta"].path), apply_review(r["actions"], log),
+                    r["meta"].duration_s, r["meta"].fps, cfg.trim)
+    typer.echo(json.dumps({k: info[k] for k in ("trimmed_path", "kept_full_rate_pct", "size_mb")}, indent=1))
 
 
 @app.command()

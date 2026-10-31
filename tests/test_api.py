@@ -59,3 +59,25 @@ def test_originals_never_served_and_names_validated(tmp_path: Path, synthetic_vi
     assert c.post("/api/jobs", json={"clip": "nope"}).status_code == 404
     ok = c.post("/api/jobs", json={"clip": "clipA", "max_seconds": 1})
     assert ok.status_code == 200 and c.get(f"/api/jobs/{ok.json()['id']}").json()["status"] == "queued"
+
+
+def test_review_flow_and_trim_requires_approval(tmp_path: Path, synthetic_video: Path):
+    c = _setup(tmp_path, synthetic_video, sanitized=True)
+    # write_outputs in _setup gave the action no id; give it one like the pipeline does
+    res = tmp_path / "outputs" / "clipA" / "result.json"
+    r = json.loads(res.read_text())
+    r["actions"][0]["id"] = "a000"
+    res.write_text(json.dumps(r))
+    st = c.get("/api/results/clipA/review").json()
+    assert [a["id"] for a in st["queue"]] == ["a000"] and st["progress"] == {"total": 1, "reviewed": 0,
+                                                                            "trim_approved": False}
+    assert c.post("/api/results/clipA/review", json={"action_id": "zzz", "op": "approve"}).status_code == 404
+    assert c.post("/api/results/clipA/review", json={"action_id": "a000", "op": "nonsense"}).status_code == 400
+    ok = c.post("/api/results/clipA/review", json={"action_id": "a000", "op": "edit", "fields": {"verb": "place"},
+                                                   "by": "khushi"})
+    assert ok.status_code == 200
+    st = c.get("/api/results/clipA/review").json()
+    assert st["queue"][0]["verb"] == "place" and st["queue"][0]["review"]["by"] == "khushi"
+    assert "place" in c.get("/api/results/clipA/download/actions_reviewed.csv").text
+    c.post("/api/results/clipA/review", json={"op": "approve_trim"})
+    assert c.get("/api/results/clipA/review").json()["trim_plan"]["approved"] is True

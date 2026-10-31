@@ -56,10 +56,7 @@ def probe(path: str | Path, min_duration_s: float = 0.0) -> VideoMeta:
         s = c.streams.video[0]
         rate = s.average_rate or s.base_rate
         fps = float(rate) if rate else 0.0
-        if s.duration and s.time_base:
-            duration = float(s.duration * s.time_base)
-        else:
-            duration = (c.duration or 0) / 1e6
+        duration = float(s.duration * s.time_base) if s.duration and s.time_base else (c.duration or 0) / 1e6
         n = s.frames or int(round(duration * fps))
         w, h, codec = s.codec_context.width, s.codec_context.height, s.codec_context.name
         try:

@@ -35,6 +35,11 @@ measurement), **Repo** (git/data-rule hygiene), **Code** (bugs). Status: ✅ fix
 | 20 | Stage 1 | Code | A run stopped mid-write left a corrupt sanitized video that the UI could have served | Videos are now written to a temp file and renamed only when complete | ✅ |
 | 21 | Stage 1 | Model | Part of a company sign stays readable at the frame edge; false "person" boxes blur wooden panels | Open: flagged for the human privacy check | ⏳ |
 | 22 | Stage 1 | Model | When the wearer squats (SGF clips), their own knees and forearms mid-frame get pixelated; only the detected hand boxes stay sharp | Open: needs a better wearer-body filter | ⏳ |
+| 23 | Stage 1 | Method | Work objects (tools, printed templates, tape rolls, metal parts) were pixelated | Privacy limited to faces and company names; text/document/screen/monitor prompts removed | ✅ |
+| 24 | Stage 5 | Env | Gemini returned 503 "high demand" on every retry, and the failure crashed the whole run (hands, contacts lost) | Offline labeller always runs; Gemini is a layer on top that falls back to it | ✅ |
+| 25 | Stage 5 | Code | One Gemini request hung for 27 minutes with no timeout | 5-minute request timeout, then the next model | ✅ |
+| 26 | Stage 5 | Env | `gemini-2.5-flash` is listed for our key but returns 404 "not available to new users"; retries were wasted on it | Model list set to the API's recommendation (3.8 → 3.7 → 3.5 → latest); 4xx errors are not retried | ✅ |
+| 27 | Stage 7 | Code | Verification checked hand presence before correcting the hand, so corrected actions came out "unverified" | Attribution first, then presence on the corrected hand (caught by a unit test) | ✅ |
 
 ## Details
 
@@ -190,3 +195,41 @@ measurement), **Repo** (git/data-rule hygiene), **Code** (bugs). Status: ✅ fix
   lower 30%; a squatting wearer's knees start higher.
 - **Plan.** Treat person boxes that overlap a wearer hand track or the wearer's forearm direction as the
   wearer, not just boxes touching the bottom edge; verify on SGF-023 and SGF-021.
+
+### 23 · Workers' tools and parts were pixelated
+- **Symptom.** Reported from the dashboard: objects the workers were using were blurred, which hides
+  exactly what the task-step timeline is about.
+- **Root cause.** The `printed text`, `paper document`, `phone screen` and `computer monitor` prompts
+  matched work objects: printed plywood templates, tape rolls, labelled boxes, shiny metal parts.
+- **Fix.** Blur only faces and company names: prompts reduced to `person` (head band), `head`, `face`,
+  `sign`, `logo`. On SGF-023 (first 30 s) the nail gun, template and planer are now sharp. (DECISIONS D11)
+- **Remaining.** Small false "head" blobs still appear occasionally (one on a planer guard, one beside the
+  worker's leg in the checked frames); see #22 for the related wearer-body issue. Company names on small
+  items are not caught without OCR.
+
+### 24 · Gemini overload crashed the whole run
+- **Symptom.** First Gemini run on `mytronlabs-000060-016`: `503 UNAVAILABLE: This model is currently
+  experiencing high demand` on all retries; the exception propagated and the run ended with only
+  `privacy_log.json` written. Hand tracks, contacts and the offline timeline were lost.
+- **Root cause.** The VLM was the only step labeller in the run, and its error was not caught.
+- **Fix.** The offline matcher now always runs (it also provides the embeddings and Stage 7's comparison).
+  Gemini runs on top; if every model fails, the run logs the error in `run.json` (`vlm_error`) and keeps
+  the offline timeline. Verified on the second run: the pipeline finished and wrote all outputs.
+- **Data rule check.** Gemini file storage was listed after each failure: 0 files left (uploads deleted in `finally`).
+
+### 25 · 27-minute hang
+- **Symptom.** A retry started at 19:25:46 and only failed at 19:53:06 ("Server disconnected").
+- **Fix.** `HttpOptions(timeout=300 s)` on the client (`steps.request_timeout_s`).
+
+### 26 · Listed model that cannot be used
+- **Symptom.** `404 NOT_FOUND: models/gemini-2.5-flash is no longer available to new users`, even though
+  `models.list()` returns it for our key. It was retried 3 times anyway.
+- **Fix.** Main model `gemini-3.8-flash` (the model the 404 message itself recommends), fallbacks
+  3.7 → 3.5 → `gemini-flash-latest`; client errors (4xx except 429 rate limit) are not retried. (DECISIONS D13)
+- **Lesson.** "Listed" does not mean "usable"; read the error body.
+
+### 27 · Verification order bug
+- **Symptom.** Unit test `test_hand_corrected_when_other_hand_did_it`: hand correctly changed to `left`,
+  but status `unverified` instead of `corrected`.
+- **Root cause.** The presence check ran on the originally claimed (wrong) hand before the correction.
+- **Fix.** Attribution first, then presence and motion checks on the corrected hand.

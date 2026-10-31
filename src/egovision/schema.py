@@ -7,12 +7,13 @@ Coordinates are pixels in the ORIGINAL video resolution, whatever resolution a m
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 Side = Literal["left", "right"]
-HandUse = Literal["left", "right", "both", "none"]
+HandUse = Literal["left", "right", "both", "none", "unknown"]
+ActionStatus = Literal["verified", "corrected", "unverified", "rejected"]
 ACTIONS_CSV_COLUMNS = ["clip", "start_s", "end_s", "verb", "object", "hand"]
 
 
@@ -34,6 +35,8 @@ class Hand(BaseModel):
     bbox: list[float]  # [x1, y1, x2, y2]
     kp2d: list[list[float]]  # 21 x [x, y]
     interp: bool = False  # True if filled between processed frames, not detected
+    source: Literal["detected", "recovered", "interpolated"] = "detected"
+    xy_cam: list[float] | None = None  # wrist in camera-origin coords (Stage 4); export only
 
     @field_validator("bbox")
     @classmethod
@@ -99,6 +102,7 @@ class ContactSegment(BaseModel):
 
 
 class Action(BaseModel):
+    id: str | None = None  # stable within a run (a000, a001, ...); used by the review layer
     clip: str
     start_s: float = Field(ge=0)
     end_s: float = Field(ge=0)
@@ -107,6 +111,14 @@ class Action(BaseModel):
     hand: HandUse
     confidence: float | None = Field(None, ge=0, le=1)
     source: str = ""  # which backend produced it
+    # Stages 7-9: verification status, flags, evidence, original times before snapping, review
+    status: ActionStatus | None = None
+    flags: list[str] = Field(default_factory=list)
+    evidence: dict[str, Any] | None = None
+    orig_start_s: float | None = None
+    orig_end_s: float | None = None
+    step_id: str | None = None
+    review: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _ordered(self) -> Action:
@@ -115,4 +127,5 @@ class Action(BaseModel):
         return self
 
     def csv_row(self) -> list[str]:
-        return [self.clip, f"{self.start_s:.2f}", f"{self.end_s:.2f}", self.verb, self.object, self.hand]
+        hand = "unknown" if self.hand == "none" else self.hand  # FORGE: left | right | both | unknown
+        return [self.clip, f"{self.start_s:.2f}", f"{self.end_s:.2f}", self.verb, self.object, hand]

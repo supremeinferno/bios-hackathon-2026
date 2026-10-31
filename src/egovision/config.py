@@ -32,6 +32,23 @@ class IngestConfig(_Strict):
     min_duration_s: float = Field(1.0, gt=0, description="Reject clips shorter than this.")
 
 
+class QCConfig(_Strict):
+    """Stage 0 quality control (egovision/qc.py)."""
+
+    enabled: bool = True
+    size: int = Field(320, ge=64, description="Width of the grey copy used for sharpness/brightness.")
+    blur_rel_threshold: float = Field(0.35, gt=0, lt=1, description="Blurry if sharpness < this x clip median (D2).")
+    covered_max_brightness: float = Field(20.0, ge=0, description="Mean grey level below this = lens covered/dark.")
+    covered_max_std: float = Field(6.0, ge=0, description="Grey std below this = featureless (lens covered).")
+
+
+class SignalsConfig(_Strict):
+    """Stage 4 camera-origin coordinates and hand signals (egovision/signals.py)."""
+
+    enabled: bool = True
+    hz: float = Field(10.0, gt=0, le=30, description="Sampling rate of signals.csv.")
+
+
 class HandsConfig(_Strict):
     backend: Literal["mediapipe"] = "mediapipe"
     model_path: Path = Path("weights/hand_landmarker.task")
@@ -42,6 +59,14 @@ class HandsConfig(_Strict):
     # PDF p.11 warns labels may come out mirrored. Measured on our footage with MediaPipe 1.2.0 they
     # do NOT: swapping put 79% of hands on the wrong half of the image (docs/DECISIONS.md D4).
     swap_handedness: bool = False
+    # Stage 3 additions (hands/mediapipe_backend.py; measured in docs/DECISIONS.md D12)
+    recover: bool = True
+    recover_clahe_clip: float = Field(3.0, gt=0, description="CLAHE clip limit for the retry copy.")
+    recover_min_score: float = Field(0.6, ge=0, le=1, description="Min handedness score for a recovered hand.")
+    filter_other_person: bool = True
+    other_person_min_down: float = Field(0.25, ge=0, description="Wrist->knuckle downward extent / hand size.")
+    other_person_max_wrist_y: float = Field(0.55, gt=0, le=1, description="Only hands with wrist above this frame share.")
+    glove_threshold_drop: float = Field(0.15, ge=0, le=0.5, description="Lower detection threshold when gloved.")
     # Linear interpolation across skipped frames only if the gap is at most this many source frames.
     max_interp_gap: int = Field(6, ge=0)
     # Tracking (hands/tracking.py)
@@ -98,19 +123,18 @@ def _p(category: str, prompt: str, min_score: float) -> VocabItem:
     return VocabItem(name=f"privacy:{category}", prompt=prompt, kind="privacy", min_score=min_score)
 
 
-# Stage 1 privacy prompts for the same OWLv2 pass. Measured on 10 frames with known faces, signs,
-# documents and screens (docs/DECISIONS.md D9): "person" finds nearly every coworker, "face" alone
-# misses most, so heads are blurred from person boxes too.
+# Stage 1 privacy prompts for the same OWLv2 pass: faces and company names only. "person" finds
+# nearly every coworker and "face" alone misses most, so heads are blurred from person boxes too
+# (docs/DECISIONS.md D9). Text/document/screen prompts were dropped because they blurred the
+# workers' tools and parts (D11).
 DEFAULT_PRIVACY_PROMPTS: list[VocabItem] = [
     _p("person", "person", 0.15), _p("head", "human head", 0.15), _p("face", "human face", 0.15),
     _p("sign", "signboard with company name", 0.15), _p("logo", "company logo", 0.2),
-    _p("text", "printed text", 0.2), _p("screen", "phone screen", 0.2), _p("screen", "computer monitor", 0.25),
-    _p("document", "paper document", 0.2),
 ]
 
 
 class PrivacyConfig(_Strict):
-    """Stage 1: blur people's heads, signage/logos/text, screens and documents in a sanitized copy.
+    """Stage 1: blur faces (people's heads) and company names (signs, logos) in a sanitized copy.
 
     The sanitized copy is what goes to cloud APIs, the UI and demos. Hand tracking runs on originals.
     Blurring is an extra safety layer; it does NOT make footage publishable (PDF data-use rules).
@@ -172,7 +196,8 @@ DEFAULT_OBJECT_VERBS: dict[str, dict[str, float]] = {
     "file": {"grind": 0.8}, "screwdriver": {"fasten": 1.0}, "mobile phone": {"other": 0.6, "inspect": 0.3},
     "grinding wheel": {"grind": 1.0}, "machine": {"adjust": 0.4, "push": 0.3}, "cloth": {"wipe": 1.0},
     "granite slab": {"push": 0.6, "wipe": 0.4, "hold": 0.3}, "roller conveyor": {"push": 0.7},
-    "slab clamp": {"adjust": 0.6, "push": 0.3}, "hand tool": {"press": 0.6, "adjust": 0.4}, "metal bar": {"push": 0.5, "carry": 0.5},
+    "slab clamp": {"adjust": 0.6, "push": 0.3}, "hand tool": {"press": 0.6, "adjust": 0.4},
+    "metal bar": {"push": 0.5, "carry": 0.5},
     "hand truck": {"push": 1.0},
     "workbench": {"other": 0.3},
 }
@@ -227,14 +252,63 @@ class StepsConfig(_Strict):
     pick_place_s: float = Field(0.8, ge=0, description="Length of pick/place carved at grab/release (0 = off).")
     both_iou: float = Field(0.5, ge=0, le=1, description="Merge L+R segments with same verb/object into 'both'.")
     # Gemini (optional; PDF minimum goal)
-    gemini_model: str = "gemini-3.5-flash"
+    gemini_model: str = "gemini-3.5-flash"  # measured: 10 s window in 3.6 s (DECISIONS D14)
+    gemini_fallback_models: list[str] = Field(
+        default_factory=lambda: ["gemini-flash-lite-latest", "gemini-3.8-flash"],
+        description="Tried in order when the main model is overloaded (503) or times out.")
+    request_timeout_s: float = Field(300.0, gt=0, description="Per-request timeout; a hung call fails, then falls back.")
     api_key_env: str = "GEMINI_API_KEY"
-    video_fps: float = Field(2.0, gt=0, le=24, description="Frames/s Gemini samples from the video.")
+    video_fps: float = Field(2.0, gt=0, le=24, description="Frames/s Gemini samples from the video (pass 1).")
+    window_s: float = Field(30.0, gt=1, description="Pass 1 window length; whole clips were refused (503).")
+    stitch_gap_s: float = Field(1.0, ge=0, description="Join same verb/object/hand actions across window edges.")
+    pass2: bool = True
+    pass2_fps: float = Field(4.0, gt=0, le=24, description="Higher sampling for pass-2 windows.")
+    pass2_window_s: float = Field(12.0, gt=1)
+    pass2_min_confidence: float = Field(0.5, ge=0, le=1, description="Re-ask windows around actions below this.")
+    pass2_max_windows: int = Field(6, ge=0)
     upload_width: int = Field(854, ge=160, description="Clip is downscaled to this width before upload.")
-    max_retries: int = Field(4, ge=0)
+    max_retries: int = Field(2, ge=0, description="Retries per model before moving to the next model.")
     cache_dir: Path = Path("cache/api")
     delete_uploads: bool = True  # data-use rule: remove uploaded clips from API storage
     allow_unsanitized_upload: bool = Field(False, description="FORGE Stage 1: only sanitized copies go to the API.")
+
+
+class VerifyConfig(_Strict):
+    """Stages 7-8: hand-grounded verification and boundary snapping (egovision/verify.py)."""
+
+    enabled: bool = True
+    min_presence: float = Field(0.3, ge=0, le=1, description="Claimed hand must be visible this share of the action.")
+    reject_presence: float = Field(0.05, ge=0, le=1, description="Below this for every hand -> rejected.")
+    min_activity: float = Field(0.02, ge=0, description="Below this, attribution is not attempted.")
+    both_ratio: float = Field(2.0, ge=1, description="Activity ratio under which both hands count as active.")
+    still_verbs: list[str] = Field(default_factory=lambda: ["hold", "inspect"])
+    still_max_speed: float = Field(0.6, ge=0, description="Camera-units/s; above this a 'still' verb is suspect.")
+    moving_verbs: list[str] = Field(default_factory=lambda: ["wipe", "push", "carry", "sand", "grind"])
+    moving_min_speed: float = Field(0.03, ge=0)
+    snap: bool = True
+    snap_window_s: float = Field(1.2, ge=0, description="Search +/- this for a motion valley (FORGE: 1-1.5 s).")
+    min_len_after_snap_s: float = Field(0.4, ge=0)
+
+
+class SOPConfig(_Strict):
+    """Stage 8 step order + completeness across clips of one source (egovision/sop.py)."""
+
+    min_support: float = Field(0.5, gt=0, le=1, description="Keep steps seen in at least this share of clips.")
+    min_clips: int = Field(2, ge=1)
+    ignore_verbs: list[str] = Field(default_factory=lambda: ["other"])
+
+
+class TrimConfig(_Strict):
+    """Stage 10 smooth trim + compress (egovision/trim.py). Only after reviewer approval."""
+
+    pad_s: float = Field(1.5, ge=0, description="Pre/post-roll around every kept action.")
+    merge_gap_s: float = Field(4.0, ge=0, description="Kept segments closer than this are merged.")
+    lite_fps: float = Field(1.0, gt=0, description="Frame rate kept outside kept segments (keep-lite).")
+    width: int = Field(854, ge=160, description="Output width (480p).")
+    codec: str = "libx265"
+    crf: int = Field(30, ge=0, le=51)
+    out_dir: Path = Path("data/trimmed")
+    require_approval: bool = True
 
 
 class RenderConfig(_Strict):
@@ -249,11 +323,17 @@ class RenderConfig(_Strict):
 class Config(_Strict):
     seed: int = 0
     device: Literal["auto", "cpu", "cuda"] = "auto"
+    profile_path: Path = Field(Path("config/worker_profiles.yaml"), description="Stage 2 worker profiles.")
     ingest: IngestConfig = Field(default_factory=IngestConfig)
+    qc: QCConfig = Field(default_factory=QCConfig)
+    signals: SignalsConfig = Field(default_factory=SignalsConfig)
     hands: HandsConfig = Field(default_factory=HandsConfig)
     objects: ObjectsConfig = Field(default_factory=ObjectsConfig)
     privacy: PrivacyConfig = Field(default_factory=PrivacyConfig)
     steps: StepsConfig = Field(default_factory=StepsConfig)
+    verify: VerifyConfig = Field(default_factory=VerifyConfig)
+    sop: SOPConfig = Field(default_factory=SOPConfig)
+    trim: TrimConfig = Field(default_factory=TrimConfig)
     render: RenderConfig = Field(default_factory=RenderConfig)
 
     @classmethod

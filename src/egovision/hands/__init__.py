@@ -24,9 +24,9 @@ class HandBackend(Protocol):
     def process(self, frame: Frame) -> list[Hand]: ...
 
 
-def make_backend(cfg: HandsConfig, meta: VideoMeta) -> HandBackend:
+def make_backend(cfg: HandsConfig, meta: VideoMeta, expected: int = 2, gloved: bool = False) -> HandBackend:
     if cfg.backend == "mediapipe":
         from egovision.hands.mediapipe_backend import MediaPipeHands
 
-        return MediaPipeHands(cfg, meta)
+        return MediaPipeHands(cfg, meta, expected=expected, gloved=gloved)
     raise ValueError(f"unknown hand backend {cfg.backend!r}")

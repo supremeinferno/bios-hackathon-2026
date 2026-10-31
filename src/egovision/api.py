@@ -26,10 +26,21 @@ from egovision.config import Config
 
 log = logging.getLogger(__name__)
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$")
-DOWNLOADS = {"actions.csv": "text/csv", "contacts.csv": "text/csv", "hands.jsonl": "application/jsonl",
-             "actions.json": "application/json", "result.json": "application/json",
-             "privacy_log.json": "application/json", "run.json": "application/json"}
+DOWNLOADS = {"actions.csv": "text/csv", "actions_reviewed.csv": "text/csv", "contacts.csv": "text/csv",
+             "signals.csv": "text/csv", "hands.jsonl": "application/jsonl", "actions.json": "application/json",
+             "result.json": "application/json", "analytics.json": "application/json", "qc.json": "application/json",
+             "steps_check.json": "application/json", "trim_map.json": "application/json",
+             "review.json": "application/json", "privacy_log.json": "application/json",
+             "run.json": "application/json"}
 WEB_DIR = Path(__file__).resolve().parents[2] / "web"
+
+
+class ReviewRequest(BaseModel):
+    action_id: str | None = None
+    op: str
+    fields: dict[str, Any] = Field(default_factory=dict)
+    at_s: float | None = None
+    by: str = Field("reviewer", min_length=1, max_length=40)
 
 
 class RunRequest(BaseModel):
@@ -46,6 +57,7 @@ class Job:
     id: str
     clip: str
     request: dict[str, Any]
+    kind: str = "pipeline"  # pipeline | trim
     status: str = "queued"  # queued | running | done | failed
     stage: str = ""
     progress: float = 0.0
@@ -92,6 +104,15 @@ def create_app(raw: Path = Path("data/raw"), uploads: Path = Path("data/uploads"
             job = q.get()
             job.status, job.stage = "running", "starting"
             r = job.request
+            if job.kind == "trim":
+                try:
+                    run_trim_job(job.clip)
+                    job.status, job.progress = "done", 1.0
+                except Exception as e:  # noqa: BLE001 - report any failure to the UI
+                    log.exception("trim job %s failed", job.id)
+                    job.status, job.error = "failed", f"{type(e).__name__}: {e}"
+                job.finished = time.time()
+                continue
             ov = [f"ingest.stride={r['stride']}", f"objects.enabled={str(r['objects']).lower()}",
                   f"privacy.enabled={str(r['privacy']).lower()}"]
             if r.get("max_seconds"):
@@ -107,6 +128,31 @@ def create_app(raw: Path = Path("data/raw"), uploads: Path = Path("data/uploads"
                 log.exception("job %s failed", job.id)
                 job.status, job.error = "failed", f"{type(e).__name__}: {e}"
             job.finished = time.time()
+
+    def reviewed_actions(clip: str) -> tuple[list[Any], list[Any]]:
+        from egovision.review import apply_review, load_log
+        from egovision.schema import Action
+
+        d = out_dir(clip)
+        r = json.loads((d / "result.json").read_text(encoding="utf-8"))
+        acts = [Action.model_validate(a) for a in r["actions"]]
+        log_ = load_log(d)
+        return apply_review(acts, log_), log_
+
+    def run_trim_job(clip: str) -> None:
+        from egovision.export import load_result
+        from egovision.trim import run_trim
+
+        d = out_dir(clip)
+        acts, log_ = reviewed_actions(clip)
+        cfg = Config()
+        if cfg.trim.require_approval and not any(x.op == "approve_trim" for x in log_):
+            raise RuntimeError("the trim plan has not been approved in review")
+        res = load_result(d)
+        if not res["sanitized"] or not Path(res["sanitized"]).is_file():
+            raise RuntimeError("no sanitized copy; trimming only ever works on the sanitized video")
+        run_trim(d, Path(res["sanitized"]), Path(res["meta"].path), acts, res["meta"].duration_s, res["meta"].fps,
+                 cfg.trim)
 
     if start_worker:
         threading.Thread(target=worker, daemon=True, name="egovision-worker").start()
@@ -185,13 +231,64 @@ def create_app(raw: Path = Path("data/raw"), uploads: Path = Path("data/uploads"
             evaluation = {"steps": sub, "labels_note": "Labels drafted by Claude Code from 1 fps frames; "
                                                        "not human-verified (labels/README.md)."}
         cfg = run.get("config", {})
+        extra: dict[str, Any] = {}
+        for name in ("analytics.json", "steps_check.json", "trim_map.json"):
+            if (d / name).is_file():
+                extra[name.removesuffix(".json")] = json.loads((d / name).read_text(encoding="utf-8"))
+        if (d / "qc.json").is_file():
+            extra["qc"] = json.loads((d / "qc.json").read_text(encoding="utf-8"))["summary"]
         return {
+            **extra,
             "clip": clip, "video": r["video"], "actions": r["actions"], "contacts": r["contacts"],
             "stats": run.get("stats", {}), "timings": run.get("timings", {}), "privacy": privacy,
             "verbs": cfg.get("steps", {}).get("verbs") or Config().steps.verbs, "evaluation": evaluation,
             "media": {"sanitized": f"/media/{clip}/sanitized.mp4" if sanitized_of(clip) else None},
             "downloads": [n for n in DOWNLOADS if (d / n).is_file()],
         }
+
+    # ---- Stage 9 review --------------------------------------------------------------------
+    @app.get("/api/results/{clip}/review")
+    def review_state(clip: str) -> dict[str, Any]:
+        from egovision.review import progress, queue
+        from egovision.trim import plan
+
+        acts, log_ = reviewed_actions(clip)
+        r = json.loads((out_dir(clip) / "result.json").read_text(encoding="utf-8"))
+        dur = float(r["video"]["duration_s"])
+        segs = plan(acts, dur, Config().trim)
+        kept = sum(x["end_s"] - x["start_s"] for x in segs if x["mode"] == "keep")
+        return {"queue": [a.model_dump() for a in queue(acts, log_)], "progress": progress(acts, log_),
+                "trim_plan": {"segments": segs, "kept_full_rate_pct": round(100 * kept / max(dur, 1e-6), 1),
+                              "approved": any(x.op == "approve_trim" for x in log_)}}
+
+    @app.post("/api/results/{clip}/review")
+    def review_decide(clip: str, req: ReviewRequest) -> dict[str, Any]:
+        from egovision.review import Decision, append
+
+        d = out_dir(clip)
+        try:
+            dec = Decision(**req.model_dump())
+        except Exception as e:  # noqa: BLE001 - pydantic validation -> 400
+            raise HTTPException(400, f"bad decision: {e}") from e
+        if dec.op != "approve_trim":
+            ids = {a.id for a in reviewed_actions(clip)[0]}
+            if dec.action_id not in ids:
+                raise HTTPException(404, f"no action {dec.action_id}")
+        append(d, dec)
+        acts, _ = reviewed_actions(clip)
+        from egovision.export import write_actions_csv
+        from egovision.review import reviewed_export
+
+        write_actions_csv(reviewed_export(acts), d / "actions_reviewed.csv")
+        return {"ok": True}
+
+    @app.post("/api/results/{clip}/trim")
+    def trim(clip: str) -> dict[str, str]:
+        out_dir(clip)
+        job = Job(id=uuid.uuid4().hex[:8], clip=clip, request={}, kind="trim")
+        jobs[job.id] = job
+        q.put(job)
+        return {"id": job.id}
 
     @app.get("/api/results/{clip}/hands")
     def hands(clip: str) -> JSONResponse:

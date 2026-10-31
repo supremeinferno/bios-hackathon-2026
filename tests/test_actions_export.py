@@ -118,7 +118,8 @@ def test_export_roundtrip(tmp_path: Path):
     assert [len(f.hands) for f in back] == [1, 0] and back[0].hands[0].side == "left"
     acts = [Action(clip="c", start_s=0, end_s=1, verb="pick", object="x", hand="left")]
     write_actions_csv(acts, tmp_path / "actions.csv")
-    rows = list(csv.reader(open(tmp_path / "actions.csv", encoding="utf-8")))
+    with open(tmp_path / "actions.csv", encoding="utf-8") as f:
+        rows = list(csv.reader(f))
     assert rows[0] == ["clip", "start_s", "end_s", "verb", "object", "hand"]
     assert rows[1] == ["c", "0.00", "1.00", "pick", "x", "left"]
     assert read_actions_csv(tmp_path / "actions.csv")[0].verb == "pick"

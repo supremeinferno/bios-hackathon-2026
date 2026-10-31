@@ -67,7 +67,7 @@ function clearResults(msg) {
   state.res = null;
   const v = $("#video"); v.removeAttribute("src"); v.load();
   $("#emptyMsg").textContent = msg; $("#emptyMsg").style.display = "grid";
-  for (const id of ["stats", "legend", "tab-actions", "tab-contacts", "tab-tracking", "tab-privacy", "tab-eval", "tab-downloads"]) $("#" + id).innerHTML = "";
+  for (const id of ["stats", "legend", "tab-actions", "tab-review", "tab-analytics", "tab-contacts", "tab-tracking", "tab-privacy", "tab-eval", "tab-downloads"]) $("#" + id).innerHTML = "";
   drawTimeline();
 }
 
@@ -97,6 +97,7 @@ function showResults() {
   const used = [...new Set(res.actions.map((a) => a.verb))];
   $("#legend").innerHTML = used.map((v) => `<span><i style="background:${state.colors[v]}"></i>${esc(v)}</span>`).join("");
   renderActions(); renderContacts(); renderTracking(); renderPrivacy(); renderEval(); renderDownloads();
+  renderReview(); renderAnalytics();
   drawTimeline();
 }
 
@@ -104,11 +105,92 @@ function renderActions() {
   const rows = state.res.actions.map((a, i) => `<tr data-t="${a.start_s}" data-i="${i}">
     <td>${fmt(a.start_s)}</td><td>${fmt(a.end_s)}</td>
     <td><span class="pill" style="background:${state.colors[a.verb] || "#999"}">${esc(a.verb)}</span></td>
-    <td>${esc(a.object)}</td><td>${esc(a.hand)}</td><td>${a.confidence ?? "–"}</td><td>${esc(a.source)}</td></tr>`).join("");
-  $("#tab-actions").innerHTML = `<p class="note">Click a row to jump to it. PS3 file: actions.csv (clip, start_s, end_s, verb, object, hand).</p>
-    <table><thead><tr><th>start</th><th>end</th><th>verb</th><th>object</th><th>hand</th><th>conf.</th><th>source</th></tr></thead>
-    <tbody>${rows || '<tr><td colspan="7">No actions.</td></tr>'}</tbody></table>`;
+    <td>${esc(a.object)}</td><td>${esc(a.hand)}</td><td>${statusPill(a.status)}<div class="flags">${esc((a.flags || []).join(", "))}</div></td>
+    <td>${a.confidence ?? "–"}</td><td>${esc(a.source)}</td></tr>`).join("");
+  $("#tab-actions").innerHTML = `<p class="note">Click a row to jump to it. PS3 file: actions.csv (clip, start_s, end_s, verb, object, hand).
+    Status comes from hand-grounded verification (Stage 7).</p>
+    <table><thead><tr><th>start</th><th>end</th><th>verb</th><th>object</th><th>hand</th><th>status</th><th>conf.</th><th>source</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="8">No actions.</td></tr>'}</tbody></table>`;
 }
+const statusPill = (st) => st ? `<span class="st st-${esc(st)}">${esc(st)}</span>` : "–";
+
+// ---------- Stage 9 review ----------
+async function renderReview() {
+  const el = $("#tab-review");
+  let rv;
+  try { rv = await api(`/api/results/${state.clip}/review`); } catch (e) { el.innerHTML = `<p class="note">${esc(e.message)}</p>`; return; }
+  const who = localStorage.getItem("reviewer") || "";
+  const rows = rv.queue.map((a) => `<tr data-t="${a.start_s}" data-id="${esc(a.id)}">
+    <td>${statusPill(a.review ? a.review.status : null) || ""} ${a.review ? "" : statusPill(a.status)}<div class="flags">${esc((a.flags || []).join(", "))}</div></td>
+    <td>${fmt(a.start_s)}–${fmt(a.end_s)}</td><td>${esc(a.verb)}</td><td>${esc(a.object)}</td><td>${esc(a.hand)}</td>
+    <td class="rv"><button data-op="approve" title="Approve">✓</button><button data-op="edit" title="Edit">✎</button>
+      <button data-op="split" title="Split at playhead">✂</button><button data-op="merge" title="Merge with next">⊕</button>
+      <button data-op="reject" title="Reject">✗</button></td></tr>`).join("");
+  const tp = rv.trim_plan;
+  el.innerHTML = `<div class="rvhead"><label>Reviewer <input id="rvName" value="${esc(who)}" placeholder="your name"></label>
+      <span class="note">${rv.progress.reviewed}/${rv.progress.total} reviewed · most uncertain first · edits are stored in review.json, model output is never overwritten</span></div>
+    <table><thead><tr><th>status</th><th>time</th><th>verb</th><th>object</th><th>hand</th><th>decide</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="6">No actions.</td></tr>'}</tbody></table>
+    <h2 style="margin-top:16px">Trim plan (Stage 10)</h2>
+    <p class="note">Keeps every non-rejected action ± padding at full rate (${tp.kept_full_rate_pct}% of the clip); the rest is kept at 1 fps so timestamps stay valid. Runs on the sanitized copy only.</p>
+    <button id="approveTrim" ${tp.approved ? "disabled" : ""}>${tp.approved ? "✓ Plan approved" : "Approve trim plan"}</button>
+    <button id="runTrim" class="primary" style="width:auto" ${tp.approved ? "" : "disabled"}>Run trim + compress</button>
+    ${state.res.trim_map ? `<p class="note">Last trim: ${esc(JSON.stringify(state.res.trim_map.size_mb))} MB</p>` : ""}`;
+}
+async function decide(body) {
+  const by = ($("#rvName")?.value || "").trim() || "reviewer";
+  localStorage.setItem("reviewer", by);
+  await api(`/api/results/${state.clip}/review`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...body, by }) });
+  await renderReview();
+}
+$("#tab-review").addEventListener("click", async (e) => {
+  const b = e.target.closest("button");
+  try {
+    if (b?.id === "approveTrim") return await decide({ op: "approve_trim" });
+    if (b?.id === "runTrim") { await api(`/api/results/${state.clip}/trim`, { method: "POST" }); return pollJobs(); }
+    const tr = e.target.closest("tr[data-id]");
+    if (!tr) return;
+    if (!b) return seek(parseFloat(tr.dataset.t));
+    const id = tr.dataset.id, op = b.dataset.op;
+    if (op === "edit") {
+      const verb = prompt(`verb (one of: ${state.res.verbs.join(", ")})`); if (verb === null) return;
+      const object = prompt("object"); if (object === null) return;
+      const hand = prompt("hand: left | right | both | unknown"); if (hand === null) return;
+      const fields = {};
+      if (verb.trim()) fields.verb = verb.trim(); if (object.trim()) fields.object = object.trim(); if (hand.trim()) fields.hand = hand.trim();
+      return await decide({ action_id: id, op, fields });
+    }
+    if (op === "split") return await decide({ action_id: id, op, at_s: $("#video").currentTime });
+    await decide({ action_id: id, op });
+  } catch (err) { alert(`Review failed: ${err.message}`); }
+});
+
+// ---------- Stage 11 analytics (+ Stage 0 QC, Stage 8 step check) ----------
+function bars(obj, scale = 1, unit = "") {
+  const max = Math.max(...Object.values(obj).map(Number), 1e-9);
+  return `<div class="bars">${Object.entries(obj).map(([k, v]) => `<div><span>${esc(k)}</span>
+    <i style="width:${(100 * v) / max}%;background:${state.colors[k] || "var(--accent)"}"></i><span>${(v * scale).toFixed(scale === 100 ? 0 : 1)}${unit}</span></div>`).join("")}</div>`;
+}
+function renderAnalytics() {
+  const a = state.res.analytics, qc = state.res.qc, sc = state.res.steps_check;
+  if (!a) { $("#tab-analytics").innerHTML = "<p class='note'>No analytics for this run (re-run the pipeline).</p>"; return; }
+  const verbs = Object.fromEntries(Object.entries(a.time_per_verb_s).map(([v, d]) => [v, d.total]));
+  let html = `<p class="note">Positions are camera-relative (the camera is on the worker's head).</p>
+    <h2>Time per verb (s)</h2>${bars(verbs)}
+    <div class="kv" style="margin-top:12px"><div>busy share L / R</div><div>${Math.round(a.busy_share.left * 100)}% / ${Math.round(a.busy_share.right * 100)}%</div>
+    <div>two-handed share</div><div>${Math.round(a.two_handed_share * 100)}%</div>`;
+  if (a.idle) html += `<div>left idle (visible, no action / not visible)</div><div>${Math.round(a.idle.left.visible_no_action_share * 100)}% / ${Math.round(a.idle.left.not_visible_share * 100)}%</div>
+    <div>right idle (visible, no action / not visible)</div><div>${Math.round(a.idle.right.visible_no_action_share * 100)}% / ${Math.round(a.idle.right.not_visible_share * 100)}%</div>`;
+  if (a.cycles) html += `<div>most repeated step</div><div>${esc(a.cycles.step)} × ${a.cycles.occurrences}, median cycle ${a.cycles.median_cycle_s ?? "–"} s${a.cycles.slow_cycles?.length ? `, slow at ${a.cycles.slow_cycles.join(", ")} s` : ""}</div>`;
+  if (qc) html += `<div>QC: blurry / lens covered</div><div>${qc.blurry_pct}% / ${qc.covered_pct}% of processed frames</div>`;
+  if (sc) html += `<div>step template (Stage 8)</div><div>completeness ${sc.completeness ?? "–"} · missing ${esc(sc.missing.join(", ") || "none")} · out of order ${esc(sc.out_of_order.join(", ") || "none")} · repeated ${esc(sc.repeated.join(", ") || "none")}</div>`;
+  html += "</div>";
+  if (a.zone_share) html += `<h2 style="margin-top:12px">Work zones, right hand</h2>${bars(a.zone_share.right, 100, "%")}
+    <h2>Work zones, left hand</h2>${bars(a.zone_share.left, 100, "%")}`;
+  $("#tab-analytics").innerHTML = html;
+}
+
 function renderContacts() {
   const rows = state.res.contacts.map((c) => `<tr data-t="${c.t_start}"><td>${fmt(c.t_start)}</td><td>${fmt(c.t_end)}</td>
     <td>${esc(c.hand)}</td><td>${esc(c.state)}</td><td>${esc(c.object_name)}</td></tr>`).join("");

@@ -15,17 +15,23 @@ from typing import Any
 import numpy as np
 
 from egovision import __version__
+from egovision.analytics import clip_analytics
 from egovision.config import Config
 from egovision.device import resolve_device
-from egovision.export import write_outputs
+from egovision.export import write_outputs, write_signals_csv
 from egovision.hands import make_backend as make_hands
 from egovision.hands.postprocess import fill_gaps
 from egovision.hands.tracking import smooth_tracks, track_hands
 from egovision.ingest import FrameSource, probe
+from egovision.profile import load_profile
+from egovision.qc import frame_qc
+from egovision.qc import summarize as summarize_qc
 from egovision.schema import Action, ContactSegment, FrameHands, FrameObjects, VideoMeta
+from egovision.signals import build_signals
 from egovision.steps import make_backend as make_steps
 from egovision.steps.features import SIDES, KeyframeFeatures, SideFeat, crop_box, cut, hand_speed, main_hand
 from egovision.steps.postprocess import clean
+from egovision.verify import status_counts, verify_and_refine
 
 log = logging.getLogger(__name__)
 Progress = Callable[[str, float], None]  # (stage, fraction 0..1)
@@ -92,9 +98,12 @@ def run_video(video: str | Path, out_root: str | Path, cfg: Config, render: bool
     timings: dict[str, float] = {}
 
     # ---- Stage: ingest + hands -------------------------------------------------------------
-    t_ingest = t_hands = 0.0
+    t_ingest = t_hands = t_qc = 0.0
     processed: list[FrameHands] = []
-    with make_hands(cfg.hands, meta_full) as hb:
+    qc_raw: list[tuple[float, float, float]] = []
+    profile = load_profile(cfg.profile_path, meta.name)
+    log.info("profile: %s expects %s%s", profile.source, profile.expected, " (gloved)" if profile.any_gloved else "")
+    with make_hands(cfg.hands, meta_full, expected=len(profile.expected), gloved=profile.any_gloved) as hb:
         it = iter(src)
         while True:
             t0 = time.perf_counter()
@@ -104,14 +113,23 @@ def run_video(video: str | Path, out_root: str | Path, cfg: Config, render: bool
                 break
             t1 = time.perf_counter()
             processed.append(FrameHands(frame=fr.index, t=round(fr.t, 4), hands=hb.process(fr)))
-            t_hands += time.perf_counter() - t1
+            t2 = time.perf_counter()
+            t_hands += t2 - t1
+            if cfg.qc.enabled:
+                qc_raw.append(frame_qc(fr.image, cfg.qc.size))
+                t_qc += time.perf_counter() - t2
             t_ingest += t1 - t0
             if len(processed) % 250 == 0:
                 log.info("hands: %d/%d frames", len(processed), len(src))
                 report("hands", len(processed) / max(len(src), 1))
+        hand_counters = dict(getattr(hb, "counters", {}))
     k = max(len(processed), 1)
     timings.update(ingest_s=round(t_ingest, 2), ingest_fps=round(k / max(t_ingest, 1e-9), 1),
-                   hands_s=round(t_hands, 2), hands_fps=round(k / max(t_hands, 1e-9), 1))
+                   hands_s=round(t_hands, 2), hands_fps=round(k / max(t_hands, 1e-9), 1), qc_s=round(t_qc, 2))
+    qc = summarize_qc([fh.frame for fh in processed], meta.fps, qc_raw, cfg.qc) if cfg.qc.enabled else None
+    if qc is not None:
+        (out_dir / "qc.json").write_text(json.dumps(qc), encoding="utf-8")
+        log.info("qc: %s", qc["summary"])
 
     t0 = time.perf_counter()
     tracked = track_hands(processed, meta.fps, meta.width, meta.height, cfg.hands)
@@ -120,10 +138,18 @@ def run_video(video: str | Path, out_root: str | Path, cfg: Config, render: bool
     filled = fill_gaps(tracked, n_eff, meta.fps, cfg.hands.max_interp_gap)
     timings["tracking_s"] = round(time.perf_counter() - t0, 2)
     log.info("tracking: %d track ids", len({h.id for fh in tracked for h in fh.hands}))
+    sig_rows: list[dict[str, Any]] = []
+    if cfg.signals.enabled or cfg.verify.enabled:
+        sig_rows = build_signals(filled, meta.fps, meta.width, meta.height, cfg.signals,
+                                 qc["frames"] if qc else None)
+        write_signals_csv(sig_rows, out_dir / "signals.csv")
 
     # ---- Stage: objects + privacy detections + keyframe features (one batched pass) --------
     t0 = time.perf_counter()
-    steps_backend = make_steps(cfg.steps, device)
+    # The offline matcher always runs: it computes the keyframe embeddings, it is the fallback when the
+    # VLM fails, and its output is kept for hand-grounded verification of VLM actions.
+    steps_backend = make_steps(cfg.steps.model_copy(update={"backend": "exemplar"}), device)
+    vlm = make_steps(cfg.steps, device) if cfg.steps.backend == "gemini" else None
     key_idx = keyframe_indices(src, cfg.objects.every_s)
     detector = None
     vocab = (cfg.objects.vocab_for(meta.name) if cfg.objects.enabled else []) + \
@@ -211,15 +237,46 @@ def run_video(video: str | Path, out_root: str | Path, cfg: Config, render: bool
     # ---- Stage: steps ---------------------------------------------------------------------
     t0 = time.perf_counter()
     report("steps", 0.0)
-    steps_backend.source_video = sanitized  # type: ignore[attr-defined]  # only sanitized video leaves the machine
-    actions = clean(steps_backend.segment(meta, filled, keyframes, contacts), meta.duration_s)
+    offline_actions = clean(steps_backend.segment(meta, filled, keyframes, contacts), meta.duration_s)
+    actions, used, vlm_actions, vlm_error = offline_actions, steps_backend.name, None, None
+    if vlm is not None:
+        vlm.source_video = sanitized  # type: ignore[attr-defined]  # only sanitized video leaves the machine
+        try:
+            vlm_actions = clean(vlm.segment(meta, filled, keyframes, contacts), meta.duration_s)
+            actions, used = vlm_actions, f"{vlm.name}:{getattr(vlm, 'model_used', '')}"
+        except Exception as e:  # noqa: BLE001 - a VLM outage must not lose the rest of the run
+            vlm_error = f"{type(e).__name__}: {e}"[:500]
+            log.error("steps: %s failed, using the offline timeline instead: %s", vlm.name, vlm_error)
+    (out_dir / "actions_offline.json").write_text(
+        json.dumps([a.model_dump() for a in offline_actions], indent=1), encoding="utf-8")
+    if vlm_actions is not None:
+        (out_dir / "actions_vlm.json").write_text(
+            json.dumps([a.model_dump() for a in vlm_actions], indent=1), encoding="utf-8")
     timings["steps_s"] = round(time.perf_counter() - t0, 2)
 
+    # ---- Stages 7-8: hand-grounded verification + boundary snapping ----------------------
+    if cfg.verify.enabled and sig_rows:
+        t0 = time.perf_counter()
+        actions = clean(verify_and_refine(actions, sig_rows, contacts, cfg.verify, profile), meta.duration_s)
+        timings["verify_s"] = round(time.perf_counter() - t0, 2)
+        log.info("verify: %s", status_counts(actions))
+    actions = [a.model_copy(update={"id": f"a{i:03d}"}) for i, a in enumerate(actions)]  # stable ids for review
+    (out_dir / "analytics.json").write_text(json.dumps(clip_analytics(actions, sig_rows, meta.duration_s), indent=1),
+                                            encoding="utf-8")
+
     stats = hand_stats(tracked, filled, meta.width)
+    stats["profile"] = {"source": profile.source, "expected": profile.expected, "gloved": profile.any_gloved}
+    stats["expected_hand_presence_pct"] = {
+        s: round(100 * sum(any(h.side == s for h in fh.hands) for fh in tracked) / max(len(tracked), 1), 1)
+        for s in profile.expected}
+    stats["hand_sources"] = {src: sum(h.source == src for fh in filled for h in fh.hands)
+                             for src in ("detected", "recovered", "interpolated")}
+    stats.update(hand_counters)
     stats.update(keyframes=len(keyframes), objects_detected=sum(len(fo.objects) for fo in frame_objects),
                  keyframes_with_contact_pct=round(100 * sum(any(c.state != "none" for c in fo.contacts)
                                                             for fo in frame_objects) / nk, 1),
-                 contact_segments=len(contacts), actions=len(actions), steps_backend=steps_backend.name,
+                 contact_segments=len(contacts), actions=len(actions), steps_backend=used,
+                 steps_requested=cfg.steps.backend, vlm_error=vlm_error, verification=status_counts(actions),
                  device=device, privacy=privacy_summary)
 
     # ---- Export -----------------------------------------------------------------------------

@@ -1,0 +1,30 @@
+# FORGE Stage 2 - worker manipulator profiles, declared by the team (never inferred from video).
+# Neutral description of what the camera sees, used only to set expectations:
+#   kind: hand | prosthetic | forearm | tool_end | none ; gloved: true/false
+# Hand detection share is measured against these expected manipulators, and an action that
+# claims a manipulator not listed here is corrected to "unknown".
+# Keys are clip-name prefixes (recording sources); the longest matching prefix wins.
+
+default:
+  manipulators:
+    - {id: left, kind: hand, gloved: false}
+    - {id: right, kind: hand, gloved: false}
+
+sources:
+  # From docs/DATA_REPORT.md: all four sources show two bare hands (no gloves in any sampled frame).
+  MTL-SGF00106:
+    manipulators:
+      - {id: left, kind: hand, gloved: false}
+      - {id: right, kind: hand, gloved: false}
+  MTL-SKL00089:
+    manipulators:
+      - {id: left, kind: hand, gloved: false}
+      - {id: right, kind: hand, gloved: false}
+  mytronlabs-000003:
+    manipulators:
+      - {id: left, kind: hand, gloved: false}
+      - {id: right, kind: hand, gloved: false}
+  mytronlabs-000060:
+    manipulators:
+      - {id: left, kind: hand, gloved: false}
+      - {id: right, kind: hand, gloved: false}
