@@ -16,13 +16,27 @@ from __future__ import annotations
 import csv
 import json
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from egovision.metrics import (
+    MATCH_IOU,
+    classification_from_confusion,
+    confusion,
+    frame_pairs,
+    hand_agnostic_counts,
+    match_segments,
+    per_class_segmental,
+    segment_confusion,
+    segmental_counts,
+    verification_counts,
+    verification_rates,
+)
 from egovision.schema import Action
+from egovision.steps.postprocess import canonical_object, normalise_object
 
 TAUS = (0.10, 0.25, 0.50)
 IDLE = "idle"
@@ -51,23 +65,6 @@ def _seg_iou(a: Action, b: Action) -> float:
     inter = max(0.0, min(a.end_s, b.end_s) - max(a.start_s, b.start_s))
     union = max(a.end_s, b.end_s) - min(a.start_s, b.start_s)
     return inter / union if union > 0 else 0.0
-
-
-def segmental_counts(pred: list[Action], gt: list[Action], tau: float) -> tuple[int, int, int]:
-    used = set()
-    tp = 0
-    for p in sorted(pred, key=lambda a: -(a.confidence or 0)):
-        best, best_j = 0.0, None
-        for j, g in enumerate(gt):
-            if j in used or g.verb != p.verb:
-                continue
-            iou = _seg_iou(p, g)
-            if iou > best:
-                best, best_j = iou, j
-        if best_j is not None and best >= tau:
-            tp += 1
-            used.add(best_j)
-    return tp, len(pred) - tp, len(gt) - tp
 
 
 def edit_score(pred: list[str], gt: list[str]) -> float:
@@ -149,7 +146,57 @@ def eval_steps(pred: list[Action], gt: list[Action], duration: float) -> dict[st
     res["object_acc_matched"] = round(100 * o_ok / matched, 1) if matched else None
     res["hand_acc_matched"] = round(100 * h_ok / matched, 1) if matched else None
     res["boundary_mae_s"] = round(float(np.mean(bound)), 2) if bound else None
+    res["detail"] = eval_steps_detail(pred, gt, duration)
     return res
+
+
+def eval_steps_detail(pred: list[Action], gt: list[Action], duration: float) -> dict[str, Any]:
+    """Second-generation metrics (egovision.metrics): confusion matrices, weighted F1, per-class P/R,
+    one-to-one matched attributes, hand-agnostic segment F1. Headline keys above are unchanged."""
+    fcm = confusion(frame_pairs(pred, gt, duration))
+    out: dict[str, Any] = {"frame": classification_from_confusion(fcm), "frame_confusion": fcm,
+                           "segment_confusion": segment_confusion(pred, gt)}
+    for tau in TAUS:
+        tp, fp, fn = hand_agnostic_counts(pred, gt, tau)
+        out[f"F1@{int(tau * 100)}_any_hand"] = _f1(tp, fp, fn)
+        out[f"counts@{int(tau * 100)}"] = [tp, fp, fn]
+    out["segment_per_class@25"] = per_class_segmental(pred, gt, 0.25)
+    m = match_segments(pred, gt, MATCH_IOU)
+    pairs = [(pred[i], gt[j]) for i, j, _ in m]
+    n = len(pairs)
+
+    def share(ok: int) -> float | None:
+        return round(100 * ok / n, 1) if n else None
+
+    out["matched_1to1"] = {
+        "n": n, "gt_recall": round(100 * n / len(gt), 1) if gt else None,
+        "pred_precision": round(100 * n / len(pred), 1) if pred else None,
+        "verb_acc": share(sum(p.verb == g.verb for p, g in pairs)),
+        "hand_acc": share(sum(p.hand == g.hand for p, g in pairs)),
+        "object_exact": share(sum(normalise_object(p.object) == normalise_object(g.object) for p, g in pairs)),
+        "object_canonical": share(sum(canonical_object(p.object) == canonical_object(g.object) for p, g in pairs)),
+        "object_lenient": share(sum(object_match(p.object, g.object) for p, g in pairs)),
+        "start_mae_s": round(float(np.mean([abs(p.start_s - g.start_s) for p, g in pairs])), 2) if n else None,
+        "end_mae_s": round(float(np.mean([abs(p.end_s - g.end_s) for p, g in pairs])), 2) if n else None,
+        "mean_iou": round(float(np.mean([iou for _, _, iou in m])), 3) if n else None,
+    }
+    out["object_pairs"] = sorted(Counter((canonical_object(g.object), canonical_object(p.object))
+                                         for p, g in pairs).items(), key=lambda kv: -kv[1])
+    out["pred_verbs"] = dict(Counter(a.verb for a in pred))
+    out["pred_hands"] = dict(Counter(a.hand for a in pred))
+    return out
+
+
+def _f1(tp: int, fp: int, fn: int) -> float:
+    return round(100 * 2 * tp / (2 * tp + fp + fn), 1) if tp + fp + fn else 0.0
+
+
+def eval_verification(statused: list[Action], gt: list[Action]) -> dict[str, Any]:
+    """Stage 7 statuses against the (draft) labels; see egovision.metrics.verification_counts."""
+    any_verb = verification_counts(statused, gt)
+    same_verb = verification_counts(statused, gt, same_verb=True)
+    return {"counts_any_verb": any_verb, "rates_any_verb": verification_rates(any_verb),
+            "counts_same_verb": same_verb, "rates_same_verb": verification_rates(same_verb)}
 
 
 # ---- hands (judged frames) ------------------------------------------------------------------------
@@ -206,15 +253,41 @@ def evaluate_dir(pred_root: Path, labels_dir: Path) -> dict[str, Any]:
         pred = clip_window(pred, duration)
         gt = clip_window(gt, duration)
         report["steps"][clip] = eval_steps(pred, gt, duration)
+        statused = pred_root / clip / "actions.json"
+        if statused.is_file():
+            from egovision.export import read_actions_json
+
+            acts = clip_window(read_actions_json(statused), duration)
+            if any(a.status for a in acts):
+                report["steps"][clip]["verification"] = eval_verification(acts, gt)
     if report["steps"]:
-        keys = [k for k in next(iter(report["steps"].values())) if k not in ("n_pred", "n_gt", "error")]
+        keys = [k for k in next(iter(report["steps"].values()))
+                if k not in ("n_pred", "n_gt", "error", "detail", "verification")]
         vals = [r for r in report["steps"].values() if "error" not in r]
         report["steps_mean"] = {k: round(float(np.mean([r[k] for r in vals if r.get(k) is not None])), 1)
                                 for k in keys if any(r.get(k) is not None for r in vals)}
     judged = labels_dir / "hands_judged.csv"
     if judged.is_file():
         report["hands"] = eval_hands_judged(judged)
+    report["hands_gt"] = eval_hands_dir(pred_root, labels_dir / "hands")
     return report
+
+
+def eval_hands_dir(pred_root: Path, gt_dir: Path) -> dict[str, Any]:
+    """Box-level hand GT (labels/hands/<clip>.hands.jsonl, docs/ANNOTATION_PLAN.md) vs OUT/<clip>/hands.jsonl."""
+    from egovision.export import read_hands_jsonl
+    from egovision.metrics import eval_hands_gt
+
+    out: dict[str, Any] = {}
+    for f in sorted(gt_dir.glob("*.hands.jsonl")) if gt_dir.is_dir() else []:
+        clip = f.name.removesuffix(".hands.jsonl")
+        pred = pred_root / clip / "hands.jsonl"
+        if not pred.is_file():
+            out[clip] = {"error": f"no prediction at {pred}"}
+            continue
+        gt = [json.loads(x) for x in f.read_text(encoding="utf-8").splitlines() if x.strip()]
+        out[clip] = eval_hands_gt(read_hands_jsonl(pred), gt)
+    return out
 
 
 def format_report(rep: dict[str, Any]) -> str:

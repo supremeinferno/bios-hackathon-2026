@@ -126,16 +126,37 @@ async function renderReview() {
     <td class="rv"><button data-op="approve" title="Approve">✓</button><button data-op="edit" title="Edit">✎</button>
       <button data-op="split" title="Split at playhead">✂</button><button data-op="merge" title="Merge with next">⊕</button>
       <button data-op="reject" title="Reject">✗</button></td></tr>`).join("");
-  const tp = rv.trim_plan;
   el.innerHTML = `<div class="rvhead"><label>Reviewer <input id="rvName" value="${esc(who)}" placeholder="your name"></label>
       <span class="note">${rv.progress.reviewed}/${rv.progress.total} reviewed · most uncertain first · edits are stored in review.json, model output is never overwritten</span></div>
     <table><thead><tr><th>status</th><th>time</th><th>verb</th><th>object</th><th>hand</th><th>decide</th></tr></thead>
     <tbody>${rows || '<tr><td colspan="6">No actions.</td></tr>'}</tbody></table>
-    <h2 style="margin-top:16px">Trim plan (Stage 10)</h2>
-    <p class="note">Keeps every non-rejected action ± padding at full rate (${tp.kept_full_rate_pct}% of the clip); the rest is kept at 1 fps so timestamps stay valid. Runs on the sanitized copy only.</p>
-    <button id="approveTrim" ${tp.approved ? "disabled" : ""}>${tp.approved ? "✓ Plan approved" : "Approve trim plan"}</button>
-    <button id="runTrim" class="primary" style="width:auto" ${tp.approved ? "" : "disabled"}>Run trim + compress</button>
-    ${state.res.trim_map ? `<p class="note">Last trim: ${esc(JSON.stringify(state.res.trim_map.size_mb))} MB</p>` : ""}`;
+    <h2 style="margin-top:16px">Trim (Stage 10)</h2>${trimHtml(rv.trim_plan)}`;
+}
+
+// ---------- Stage 10 trim (inside the review tab) ----------
+const TRIM_MODES = { cut: "Shorter video: cut the idle stretches out",
+  keep_lite: "Same length, smaller file: idle stretches kept at 1 fps" };
+const TRIM_SHORT = { cut: "Shorter video", keep_lite: "Same length" };
+function trimHtml(tp) {
+  state.trimMode = tp.modes.includes(state.trimMode) ? state.trimMode : tp.default_mode;
+  const nothing = tp.cuts === 0;
+  const busy = Object.keys(state.jobs).length > 0;
+  const bar = tp.segments.map((s) => `<i class="${s.mode}" data-t="${s.start_s}" title="${s.mode === "keep" ? "kept" : "idle"} ${fmt(s.start_s)}–${fmt(s.end_s)}"
+    style="left:${(100 * s.start_s) / tp.duration_s}%;width:${(100 * (s.end_s - s.start_s)) / tp.duration_s}%"></i>`).join("");
+  const runs = Object.entries(tp.runs).map(([m, r]) => `<li><b>${esc(TRIM_SHORT[m] || m)}</b>: ${fmt(tp.duration_s)} → ${fmt(r.output_duration_s)},
+    ${r.size_mb.trimmed} MB (sanitized copy ${r.size_mb.sanitized} MB) · <a href="${r.url}" target="_blank" rel="noopener">▶ open video</a>
+    ${r.current ? "" : '<span class="warn">· made from an older plan</span>'}</li>`).join("");
+  const what = nothing
+    ? "Nothing to trim: the actions cover the whole clip, so there is no idle stretch long enough to cut."
+    : `${tp.cuts} idle stretch${tp.cuts > 1 ? "es" : ""} (${tp.idle_s} s). A shorter video would last ${fmt(tp.cut_duration_s)} instead of ${fmt(tp.duration_s)} (${tp.kept_pct}% kept).`;
+  return `<p class="note">${what} Idle = no action within ±0.5 s. Actions you reject above are trimmed too; Stage 7 "rejected" actions are kept, because they are often real work with the hands out of view. Runs on the sanitized copy only.</p>
+    <div class="trimbar" title="blue = kept, grey = idle; click to jump">${bar}</div>
+    <div class="trimmodes">${tp.modes.map((m) => `<label><input type="radio" name="trimMode" value="${m}" ${m === state.trimMode ? "checked" : ""}> ${esc(TRIM_MODES[m] || m)}</label>`).join("")}</div>
+    <button id="approveTrim" ${tp.approved || nothing ? "disabled" : ""}>${tp.approved ? "✓ Plan approved" : "Approve trim plan"}</button>
+    <button id="runTrim" class="primary" style="width:auto" ${tp.approved && !nothing && tp.has_sanitized && !busy ? "" : "disabled"}>${busy ? "Working… (see jobs)" : "Run trim"}</button>
+    ${tp.approval_outdated ? '<p class="note warn">The plan changed after the last approval (an edit, split, merge or reject). Approve it again.</p>' : ""}
+    ${tp.has_sanitized ? "" : '<p class="note warn">No sanitized copy for this clip; trimming only works on the sanitized video.</p>'}
+    ${runs ? `<ul class="trimruns">${runs}</ul>` : ""}`;
 }
 async function decide(body) {
   const by = ($("#rvName")?.value || "").trim() || "reviewer";
@@ -148,7 +169,15 @@ $("#tab-review").addEventListener("click", async (e) => {
   const b = e.target.closest("button");
   try {
     if (b?.id === "approveTrim") return await decide({ op: "approve_trim" });
-    if (b?.id === "runTrim") { await api(`/api/results/${state.clip}/trim`, { method: "POST" }); return pollJobs(); }
+    if (b?.id === "runTrim") {
+      const { id } = await api(`/api/results/${state.clip}/trim`, { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: state.trimMode }) });
+      state.jobs[id] = true;  // reload this clip when the job finishes (pollJobs)
+      await renderReview();
+      return pollJobs();
+    }
+    const seg = e.target.closest(".trimbar i");
+    if (seg) return seek(parseFloat(seg.dataset.t));
     const tr = e.target.closest("tr[data-id]");
     if (!tr) return;
     if (!b) return seek(parseFloat(tr.dataset.t));
@@ -164,6 +193,9 @@ $("#tab-review").addEventListener("click", async (e) => {
     if (op === "split") return await decide({ action_id: id, op, at_s: $("#video").currentTime });
     await decide({ action_id: id, op });
   } catch (err) { alert(`Review failed: ${err.message}`); }
+});
+$("#tab-review").addEventListener("change", (e) => {
+  if (e.target.name === "trimMode") state.trimMode = e.target.value;
 });
 
 // ---------- Stage 11 analytics (+ Stage 0 QC, Stage 8 step check) ----------
@@ -348,12 +380,16 @@ $("#runBtn").addEventListener("click", async () => {
 });
 async function pollJobs() {
   const jobs = await api("/api/jobs").catch(() => []);
-  $("#jobList").innerHTML = jobs.slice(0, 6).map((j) => `<li><b>${esc(j.clip)}</b> · <span class="status-${j.status}">${j.status}</span>
+  $("#jobList").innerHTML = jobs.slice(0, 6).map((j) => `<li><b>${esc(j.clip)}</b>${j.kind === "trim" ? " · trim" : ""} · <span class="status-${j.status}">${j.status}</span>
     ${j.status === "running" ? ` · ${esc(j.stage)} ${Math.round(j.progress * 100)}%` : ""}${j.error ? `<div class="status-failed">${esc(j.error)}</div>` : ""}
     <div class="bar"><i style="width:${(j.status === "done" ? 1 : j.progress) * 100}%"></i></div></li>`).join("");
   const active = jobs.some((j) => j.status === "queued" || j.status === "running");
   for (const j of jobs) {
-    if (j.status === "done" && state.jobs[j.id]) { delete state.jobs[j.id]; await loadClips(); if (j.clip === state.clip) selectClip(j.clip); }
+    if ((j.status === "done" || j.status === "failed") && state.jobs[j.id]) {
+      delete state.jobs[j.id];
+      if (j.status === "done") { await loadClips(); if (j.clip === state.clip) await selectClip(j.clip); }
+      else if (j.clip === state.clip && state.res) await renderReview();  // re-enable the buttons; the error is in the job list
+    }
   }
   if (active) setTimeout(pollJobs, 1500);
 }

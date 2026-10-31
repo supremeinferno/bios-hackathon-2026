@@ -1,0 +1,15 @@
+# O2: O0 with the stone-plant detector entry "hand tool" (prompt "yellow hand tool") renamed to "hoist controller"
+# with a specific prompt: on dev frames the old prompt boxed the hoist remote AND a long metal bar.
+# Only the mytronlabs-000060 vocabulary is given here (this config is for the dev clip of that source only).
+objects:
+  vocab:
+    mytronlabs-000060:
+      - {name: cloth, prompt: cloth rag}
+      - {name: hoist controller, prompt: yellow handheld remote control}
+      - {name: metal bar, prompt: metal bar}
+      - {name: hand truck, prompt: hand truck}
+      - {name: granite slab, prompt: granite slab, kind: fixed}
+      - {name: roller conveyor, prompt: roller conveyor, kind: fixed}
+      - {name: slab clamp, prompt: yellow lifting clamp, kind: fixed}
+steps:
+  backend: exemplar

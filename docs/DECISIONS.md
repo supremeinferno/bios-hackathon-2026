@@ -120,3 +120,34 @@ Dev clip `mytronlabs-000060-010` (0-60 s, 14 draft segments, labelled before any
 Pass 2 off; verification and snapping on (never worse on dev). Tiny sample: one minute, 14 segments.
 Disclosure: the snapping bug (ERRORS #28) was noticed on the held-out clip; the fix is a logic
 correction (missing != zero), not a tuned threshold. Held-out numbers are reported for raw and final.
+
+## D16 — RT-DETR hand detector as a recovery source: better than CLAHE, kept OFF by default (for now)
+NVIDIA RT-DETR Hand Detector v1 (`nvidia/RT-DETR-Hand-Detector-v1`, `hand_detector.onnx`, 80.4 MB,
+OpenMDW-1.1, sha256-pinned in `scripts/download_weights.py`; `onnxruntime-gpu==1.26.0`, extra `rtdetr`).
+On this laptop: 22 img/s on the RTX 3050 (CUDA), 2.3 img/s on CPU. Only its 2D boxes are used: when
+MediaPipe finds fewer hands than expected, each box is cropped (padded square, side x1.5), MediaPipe runs
+on the crop, keypoints are mapped back; boxes with no MediaPipe hand are discarded. MediaPipe's own hands
+are never changed (regression test: default output identical to before).
+
+`scripts/measure_hands.py`, first 60 s, every 2nd frame at 960 px (run while the 40-clip batch used the
+same CPU/GPU, so fps are comparable between variants but low in absolute terms):
+
+| clip | frames with >=1 hand: base / CLAHE / RT-DETR | both hands | recovered: CLAHE / RT-DETR | hand fps: base / CLAHE / RT-DETR |
+|---|---|---|---|---|
+| SKL-005 | 91.0 / 93.0 / 93.0 | 67.6 / 69.6 / 70.8 | 36 / 47 | 23.3 / 23.0 / 16.8 |
+| 000003-002 | 89.2 / 90.4 / 91.3 | 44.2 / 46.2 / 48.4 | 29 / 57 | 26.7 / 19.8 / 9.5 |
+| SGF-036 | 54.4 / 55.6 / 61.1 | 3.2 / 3.3 / 6.1 | 11 / 86 | 37.3 / 12.7 / 5.2 |
+| 000060-016 | 10.2 / 11.8 / 14.7 | 0.7 / 1.0 / 1.1 | 17 / 44 | 44.2 / 20.7 / 10.8 |
+
+RT-DETR boxes with no MediaPipe hand inside (discarded): 212/415, 459/1014, 995/1540, 661/786.
+Visual check of all 234 RT-DETR-recovered hands (crops in artifacts/measure/, git-ignored): ~207 real
+wearer hands (~88%); wrong: 4 bare feet and 1 knee (SGF, SKL), 1 pink roller (stone plant; CLAHE had 7 of
+12), ~6 coworker hands (000003), ~5 forearm-only crops, 5 crops with no hand (blurred planks, objects);
+~8 too blurred to tell. Baselines here are 1-2 pts below D12's because these runs read the JPEG frame
+cache while D12 decoded directly; comparisons within this table use identical frames.
+
+Decision: RT-DETR recovery beats CLAHE on gain (+2.0 to +6.7 pts vs +1.2 to +2.0) and on precision.
+It stays OFF by default because (a) it slows the hand stage 1.4-7x on clips where MediaPipe often misses
+hands, (b) ~8% of its additions are wrong (feet, coworker hands), and (c) switching the default changes
+every output and needs a re-run of all clips. Enable per run with
+`--set hands.recover=true --set hands.recover_detector=rtdetr` (e.g. for the demo clips).

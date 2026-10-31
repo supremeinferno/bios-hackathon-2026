@@ -67,6 +67,12 @@ tbody tr { cursor: pointer; } tbody tr:hover { background: var(--panel2); } tr.n
 .flags { color: var(--muted); font-size: 11px; }
 .rv button { padding: 3px 8px; margin-right: 3px; font-size: 12px; }
 .rvhead { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.trimbar { position: relative; height: 16px; margin: 8px 0 10px; background: var(--panel2); border-radius: 4px; overflow: hidden; }
+.trimbar i { position: absolute; top: 0; bottom: 0; cursor: pointer; }
+.trimbar i.keep { background: var(--accent); } .trimbar i.idle { background: #3a4048; }
+.trimmodes { display: grid; gap: 4px; margin: 0 0 10px; font-size: 13px; }
+.trimruns { margin: 10px 0 0; padding-left: 18px; font-size: 13px; } .trimruns a { color: var(--accent); }
+.warn { color: var(--warn); }
 .rvhead input { width: 160px; padding: 5px 8px; background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; }
 .bars div { display: grid; grid-template-columns: 120px 1fr 60px; gap: 8px; align-items: center; font-size: 12px; margin: 3px 0; }
 .bars i { display: block; height: 10px; border-radius: 3px; }

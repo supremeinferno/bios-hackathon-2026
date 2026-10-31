@@ -25,14 +25,66 @@ def parse_time(v: Any) -> float:
     return float(s)
 
 
+# Out-of-list verbs a model or annotator may write, mapped by the SPEC A2 definitions (config
+# DEFAULT_VERB_GLOSSARY). Verbs with no fitting class (pull, open, fold, reach, walk) stay 'other'.
+VERB_SYNONYMS: dict[str, str] = {
+    "grab": "pick", "take": "pick", "lift": "pick",
+    "put": "place", "set": "place", "drop": "place", "lay": "place",
+    "grip": "hold", "steady": "hold", "support": "hold",
+    "transport": "carry",
+    "tape": "attach", "wrap": "attach", "clip": "attach", "glue": "attach", "stick": "attach", "fit": "attach",
+    "screw": "fasten", "nail": "fasten", "drill": "fasten", "bolt": "fasten", "staple": "fasten", "hammer": "fasten",
+    "saw": "cut", "trim": "cut", "plane": "sand", "polish": "grind", "file": "grind",
+    "clean": "wipe", "scrub": "wipe", "rub": "wipe",
+    "slide": "push", "tilt": "push",  # not "roll": "roll paper around parts" (SKL) is attach, a slab is push
+    "switch": "press", "operate": "press",
+    "align": "adjust", "position": "adjust", "tighten": "adjust",
+    "check": "inspect", "examine": "inspect", "mark": "write",
+}
+
+
+def _forms(w: str) -> list[str]:
+    """Candidate base forms: placing -> place, wiping -> wipe, carrying -> carry, cutting -> cut, taped -> tape."""
+    out = [w]
+    if w.endswith("ing") and len(w) > 5:
+        b = w[:-3]
+        out += [b, b + "e"] + ([b[:-1]] if len(b) > 2 and b[-1] == b[-2] else [])
+    if w.endswith("ies"):
+        out.append(w[:-3] + "y")
+    if w.endswith("ed") and len(w) > 4:
+        out += [w[:-2], w[:-1]] + ([w[:-3]] if w[-3] == w[-4] else [])
+    if w.endswith("es"):
+        out.append(w[:-2])
+    if w.endswith("s") and not w.endswith("ss"):
+        out.append(w[:-1])
+    return out
+
+
 def normalise_verb(v: str, verbs: list[str]) -> str:
-    v = (v or "").strip().lower()
+    """Map free text to the closed verb list: exact, then inflected forms ('placing' -> place; before this
+    audit 'placing', 'wiping', 'carrying' and 'writing' fell through to 'other'), then synonyms."""
+    v = re.sub(r"\s+", " ", (v or "").strip().lower())
     if v in verbs:
         return v
-    for cand in verbs:  # "picking up" -> "pick", "fastens" -> "fasten"
-        if v.startswith(cand) or cand in v.split():
-            return cand
+    for w in v.split():
+        forms = _forms(w)
+        for f in forms:
+            if f in verbs:
+                return f
+        for f in forms:
+            if f in VERB_SYNONYMS and VERB_SYNONYMS[f] in verbs:
+                return VERB_SYNONYMS[f]
     return "other" if "other" in verbs else verbs[-1]
+
+
+_IDLE_OBJECTS = {"nothing", "none", "no object", "empty", "air", "idle", "n/a", ""}
+
+
+def is_idle_item(item: dict[str, Any]) -> bool:
+    """A model item that describes idle time ('other' on 'nothing'), which the prompt asks it not to list."""
+    verb = str(item.get("verb", "")).strip().lower()
+    obj = str(item.get("object", "")).strip().lower()
+    return verb in ("other", "idle", "none", "rest") and obj in _IDLE_OBJECTS
 
 
 def normalise_object(o: str) -> str:
@@ -87,8 +139,10 @@ def from_raw(raw: list[dict[str, Any]], clip: str, verbs: list[str], source: str
             continue
         hand = _HANDS.get(str(item.get("hand", "")).strip().lower(), "none")
         conf = item.get("confidence")
+        vis = str(item.get("hands_visible", "")).strip().lower()
         out.append(Action(clip=clip, start_s=s, end_s=e, verb=normalise_verb(str(item.get("verb", "")), verbs),
                           object=normalise_object(str(item.get("object", ""))), hand=hand,  # type: ignore[arg-type]
                           confidence=float(conf) if isinstance(conf, int | float) and 0 <= conf <= 1 else None,
-                          source=source))
+                          source=source,
+                          evidence={"vlm_hands_visible": vis} if vis in ("yes", "partly", "no") else None))
     return out

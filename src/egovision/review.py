@@ -88,7 +88,21 @@ def reviewed_export(actions: list[Action]) -> list[Action]:
     return [a for a in actions if not (a.review and a.review.get("status") == "rejected")]
 
 
-def progress(actions: list[Action], log: list[Decision]) -> dict[str, Any]:
+def approved_plan(log: list[Decision]) -> str | None:
+    """Plan fingerprint of the latest approve_trim decision; '' for approvals stored before fingerprints."""
+    for d in reversed(log):
+        if d.op == "approve_trim":
+            return str(d.fields.get("plan_sha", ""))
+    return None
+
+
+def trim_approved(log: list[Decision], plan_sha: str) -> bool:
+    """An approval counts only for the exact plan the reviewer saw: a later edit, split, merge or reject that
+    changes the plan needs a new approval."""
+    return approved_plan(log) == plan_sha
+
+
+def progress(actions: list[Action], log: list[Decision], plan_sha: str | None = None) -> dict[str, Any]:
     reviewed = {d.action_id for d in log if d.action_id}
-    return {"total": len(actions), "reviewed": sum(a.id in reviewed for a in actions),
-            "trim_approved": any(d.op == "approve_trim" for d in log)}
+    approved = trim_approved(log, plan_sha) if plan_sha is not None else approved_plan(log) is not None
+    return {"total": len(actions), "reviewed": sum(a.id in reviewed for a in actions), "trim_approved": approved}

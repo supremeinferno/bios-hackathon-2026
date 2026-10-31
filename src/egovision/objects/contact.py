@@ -44,6 +44,27 @@ def associate(hands: list[Hand], objects: list[ObjectDet], cfg: ObjectsConfig) -
     return contacts
 
 
+def nearest_object(hand: Hand, objects: list[ObjectDet], max_dist: float) -> ObjectDet | None:
+    """Closest object to the fingertips when the hand touches nothing: portable objects first, fixed ones only
+    if no portable object is within `max_dist` hand sizes (a fixed conveyor fills the frame and would always
+    win otherwise). Distance = fingertip centroid to the box edge (0 inside), in hand sizes."""
+    size = max(hand.bbox[2] - hand.bbox[0], hand.bbox[3] - hand.bbox[1], 1.0)
+    cx = sum(hand.kp2d[i][0] for i in FINGERTIPS) / len(FINGERTIPS)
+    cy = sum(hand.kp2d[i][1] for i in FINGERTIPS) / len(FINGERTIPS)
+
+    def dist(o: ObjectDet) -> float:
+        dx = max(o.bbox[0] - cx, 0.0, cx - o.bbox[2])
+        dy = max(o.bbox[1] - cy, 0.0, cy - o.bbox[3])
+        return (dx * dx + dy * dy) ** 0.5 / size
+
+    for kind in ("portable", "fixed"):
+        cands = [(dist(o), -o.score, o) for o in objects if o.kind == kind]
+        cands = [c for c in cands if c[0] <= max_dist]
+        if cands:
+            return min(cands, key=lambda c: (c[0], c[1]))[2]
+    return None
+
+
 def contact_segments(frames: list[FrameObjects], clip: str, step_s: float, min_s: float) -> list[ContactSegment]:
     """Per-side runs of (state, object) at keyframe resolution; runs shorter than `min_s` are absorbed."""
     out: list[ContactSegment] = []

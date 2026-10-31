@@ -18,7 +18,7 @@ flowchart TD
     S7["7 · Hand-grounded verification<br/>verified / corrected / unverified / rejected"]
     S8["8 · Step order + completeness<br/>SOP alignment, motion-valley boundary snapping,<br/>missing / out-of-order flags"]
     S9["9 · Human-in-the-loop review<br/>uncertainty-sorted queue: approve, edit, split, merge, reject"]
-    S10["10 · Smooth trim + compress<br/>padding, keep-lite, time map"]
+    S10["10 · Trim + compress<br/>cut idle or keep-lite, time map"]
     S11["11 · Analytics<br/>step durations, idle time, work zones, cycles"]
     S12["12 · Render + dashboard<br/>sanitized video, overlays, timeline, downloads"]
     S13["13 · Evaluation<br/>before vs after, measured on reviewed labels"]
@@ -64,7 +64,7 @@ flowchart TD
 | 7 | Hand-grounded verification | actions + signals → status per action |
 | 8 | Step order + completeness | verified actions → `actions_refined.json` |
 | 9 | Human review | refined actions → `review.json` |
-| 10 | Smooth trim + compress | reviewed video → `data/trimmed/<clip>.mp4`, `trim_map.json` |
+| 10 | Trim + compress | reviewed video → `data/trimmed/<clip>_<mode>.mp4` (`cut`: shorter; `keep_lite`: same length), `trim_map.json` (plan, time map), `actions_trimmed.csv` (cut mode) |
 | 11 | Analytics | actions + signals → durations, zones, cycles |
 | 12 | Render + dashboard | everything → JS dashboard, annotated MP4 |
 | 13 | Evaluation | outputs + reviewed labels → before/after metrics |

@@ -131,6 +131,11 @@ def run_video(video: str | Path, out_root: str | Path, cfg: Config, render: bool
         (out_dir / "qc.json").write_text(json.dumps(qc), encoding="utf-8")
         log.info("qc: %s", qc["summary"])
 
+    # Raw per-frame detections before tracking: lets tracking / verification experiments replay without
+    # re-running the hand model (scripts/replay.py).
+    with open(out_dir / "hands_raw.jsonl", "w", encoding="utf-8") as f:
+        for fh in processed:
+            f.write(fh.model_dump_json() + "\n")
     t0 = time.perf_counter()
     tracked = track_hands(processed, meta.fps, meta.width, meta.height, cfg.hands)
     if cfg.hands.smooth:
@@ -164,7 +169,7 @@ def run_video(video: str | Path, out_root: str | Path, cfg: Config, render: bool
 
         sanitizer = Sanitizer(meta_full, cfg.privacy)
     log.info("keyframes: %d, %d prompts (%s)", len(key_idx), len(vocab), ", ".join(v.name for v in vocab))
-    from egovision.objects import associate, contact_segments
+    from egovision.objects import associate, contact_segments, nearest_object
 
     lag = max(1, int(round(cfg.steps.speed_lag_s * meta.fps)))
     frame_objects: list[FrameObjects] = []
@@ -195,8 +200,10 @@ def run_video(video: str | Path, out_root: str | Path, cfg: Config, render: bool
                     continue
                 con = next((c for c in contacts if c.hand_id == h.id), None)
                 box = crop_box(h, con, cfg.steps.crop_pad, cfg.steps.crop_min_px, meta.width, meta.height)
+                near = nearest_object(h, objs, cfg.steps.object_fallback_max_dist)
                 kf.sides[side] = SideFeat(present=True, hand_id=h.id, contact=con, crop_box=box,
-                                          speed=hand_speed(filled, f.index, side, lag, meta.fps))
+                                          speed=hand_speed(filled, f.index, side, lag, meta.fps),
+                                          near_object=near.label if near else None)
                 if steps_backend.needs_embeddings:
                     crops.append(cut(f.image, box, src.scale))
                     owners.append((kf, side))
@@ -284,7 +291,8 @@ def run_video(video: str | Path, out_root: str | Path, cfg: Config, render: bool
 
     # ---- Export -----------------------------------------------------------------------------
     t0 = time.perf_counter()
-    write_outputs(out_dir, meta, filled, frame_objects, contacts, actions, keyframes, sanitized)
+    write_outputs(out_dir, meta, filled, frame_objects, contacts, actions, keyframes, sanitized,
+                  drop_rejected=cfg.verify.enabled and cfg.verify.drop_rejected)
     timings["export_s"] = round(time.perf_counter() - t0, 2)
     t_render = 0.0
     if cfg.render.enabled if render is None else render:

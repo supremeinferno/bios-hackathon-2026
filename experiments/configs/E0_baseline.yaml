@@ -1,0 +1,5 @@
+# E0 baseline: the pipeline exactly as committed at f9b5722 ("final pipeline" in docs/RESULTS.md):
+# MediaPipe hands + tracking, OWLv2 contacts, Gemini 30 s windows (pass 1), Stage 7 verification,
+# Stage 8 boundary snapping. Gemini answers come from cache/api (no new API calls for this config).
+steps:
+  backend: gemini

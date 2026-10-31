@@ -51,7 +51,7 @@ The full 15-stage pipeline (FORGE) is in [docs/PIPELINE.md](docs/PIPELINE.md). S
 | 7 Verification | Each action checked against hand presence, motion and contacts → verified / corrected / unverified / rejected | own code |
 | 8 Order + boundaries | Boundaries snapped to hand-motion valleys; per-source step template; missing / out-of-order / repeated flags | own code (DP / LCS) |
 | 9 Review | Queue sorted by uncertainty; approve / edit / split / merge / reject; separate `review.json` layer | FastAPI + JS |
-| 10 Trim | Keep-lite trim + H.265 of the sanitized copy after approval; original timestamps kept | PyAV, libx265 |
+| 10 Trim | After the reviewer approves the current plan: cut idle stretches (shorter video + time map) or keep them at 1 fps (same length); H.264 of the sanitized copy | PyAV, libx264 |
 | 11 Analytics | Time per verb, idle time, two-handed share, work zones, placements, cycles | own code |
 | 12 Dashboard | Sanitized video with live hand/object overlay, clickable two-lane timeline, review, downloads | FastAPI, plain JS |
 | 13 Evaluation | Segment F1@10/25/50, edit score, frame accuracy, boundary error; hand-judging sheets | own code |
@@ -89,7 +89,7 @@ egovision run --video data/raw/<clip>.mp4 --set steps.backend=gemini   # + Gemin
 egovision batch data/raw --skip-done                         # every clip; one failure does not stop the batch
 egovision sop                                                # step templates + missing/out-of-order flags
 egovision eval                                               # score against labels/ (our own labels)
-egovision trim --clip <clip>                                 # after the trim plan is approved in review
+egovision trim --clip <clip> --mode cut                      # after the trim plan is approved in review (or keep_lite)
 egovision ui                                                 # dashboard at http://127.0.0.1:8000
 python scripts/make_demo.py --clip <clip>:20:30 --out artifacts/demo.mp4   # presentation video
 ```

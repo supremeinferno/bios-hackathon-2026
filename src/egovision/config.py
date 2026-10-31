@@ -65,6 +65,12 @@ class HandsConfig(_Strict):
     recover: bool = False
     recover_clahe_clip: float = Field(3.0, gt=0, description="CLAHE clip limit for the retry copy.")
     recover_min_score: float = Field(0.6, ge=0, le=1, description="Min handedness score for a recovered hand.")
+    recover_detector: Literal["clahe", "rtdetr"] = Field(
+        "clahe", description="Source of recovery candidates: CLAHE full-frame retry, or RT-DETR boxes (D16).")
+    rtdetr_weights: Path = Path("weights/rtdetr_hand_detector_v1.onnx")
+    rtdetr_score_threshold: float = Field(0.5, ge=0, le=1, description="Min RT-DETR box confidence.")
+    rtdetr_crop_pad: float = Field(0.5, ge=0, description="Square crop side = longer box side x (1 + pad).")
+    rtdetr_max_iou: float = Field(0.3, ge=0, le=1, description="Max overlap with an existing hand.")
     filter_other_person: bool = False
     other_person_min_down: float = Field(0.25, ge=0, description="Wrist->knuckle downward extent / hand size.")
     other_person_max_wrist_y: float = Field(0.55, gt=0, le=1, description="Only hands with wrist above this frame share.")
@@ -201,6 +207,7 @@ DEFAULT_OBJECT_VERBS: dict[str, dict[str, float]] = {
     "grinding wheel": {"grind": 1.0}, "machine": {"adjust": 0.4, "push": 0.3}, "cloth": {"wipe": 1.0},
     "granite slab": {"push": 0.6, "wipe": 0.4, "hold": 0.3}, "roller conveyor": {"push": 0.7},
     "slab clamp": {"adjust": 0.6, "push": 0.3}, "hand tool": {"press": 0.6, "adjust": 0.4},
+    "hoist controller": {"press": 0.6, "adjust": 0.4},  # same object as the yellow 'hand tool' (dev clip check)
     "metal bar": {"push": 0.5, "carry": 0.5},
     "hand truck": {"push": 1.0},
     "workbench": {"other": 0.3},
@@ -229,6 +236,32 @@ DEFAULT_VERB_PHRASES: dict[str, list[str]] = {
 }
 
 
+# Verb definitions given to the VLM (prompt v3) and to human annotators (docs/ANNOTATION_PLAN.md). They write
+# out SPEC.md A2, fixed before labelling: "sand covers plane/sand; grind covers grind/polish; attach covers end
+# caps, tape and clips; push covers sliding/tilting slabs"; press per DECISIONS D6.
+DEFAULT_VERB_GLOSSARY: dict[str, str] = {
+    "pick": "grasp an object and take it from a surface, container or person (the short moment of taking)",
+    "place": "put a held object down or into position and let go (the short moment of putting)",
+    "hold": "keep an object still or supported without otherwise working on it (e.g. steadying a part for the other hand)",
+    "carry": "move a held object while walking or turning to another place",
+    "insert": "push a part into or through an opening, slot or channel of another part",
+    "attach": "join a part onto another by fitting, clipping, taping, wrapping or gluing, without a tool driving a "
+              "fastener (end caps, tape and clips are attach)",
+    "fasten": "join parts with screws, nails, staples or bolts driven by a tool or by hand (drill, nail gun, hammer, "
+              "screwdriver)",
+    "cut": "separate material with a saw, blade, knife or scissors",
+    "sand": "smooth a surface with sandpaper, a sander or a planer",
+    "grind": "remove material with a grinding or polishing wheel or a file",
+    "wipe": "clean or rub a surface with a cloth, rag or the hand",
+    "push": "move an object by pushing, sliding or tilting it (e.g. a slab along rollers, a hand truck)",
+    "press": "press buttons or a control (e.g. a hoist remote, a switch), or press down on something",
+    "adjust": "small movements to align, position or tighten something already in place",
+    "inspect": "look closely at an object, turning it, without changing it",
+    "write": "write or mark with a pen, pencil or marker",
+    "other": "a hand action none of the verbs above describes (e.g. pull, fold, open); never idle time",
+}
+
+
 class StepsConfig(_Strict):
     backend: Literal["exemplar", "gemini"] = Field(
         "exemplar", description="exemplar = offline prototype matching on hand/object/visual cues; gemini = API."
@@ -239,6 +272,14 @@ class StepsConfig(_Strict):
     crop_pad: float = Field(0.35, ge=0, description="Hand(+object) crop padding as a fraction of its size.")
     crop_min_px: int = Field(96, ge=16)
     exemplars_file: Path | None = Field(None, description="Optional labelled exemplars (few-shot visual prototypes).")
+    exemplars_features_root: Path = Field(Path("outputs"), description=(
+        "Folder with <clip>/features.npz for the exemplar rows. Was hard-coded to outputs/, so exemplars from a run "
+        "kept elsewhere were silently ignored."))
+    object_fallback: Literal["none", "nearest"] = Field("none", description=(
+        "Object name when a hand has no contact: none = 'unknown'; nearest = closest detected object to the "
+        "fingertips (portable first, then fixed), within object_fallback_max_dist. Naming only: verb scores still "
+        "use contacts."))
+    object_fallback_max_dist: float = Field(1.5, ge=0, description="Max fingertip-to-box distance in hand sizes.")
     object_verbs: dict[str, dict[str, float]] = Field(default_factory=lambda: dict(DEFAULT_OBJECT_VERBS))
     w_text: float = Field(1.0, ge=0, description="Weight of SigLIP text-prototype similarity.")
     w_cue: float = Field(1.0, ge=0, description="Weight of held-object cue prior.")
@@ -265,6 +306,18 @@ class StepsConfig(_Strict):
     video_fps: float = Field(2.0, gt=0, le=24, description="Frames/s Gemini samples from the video (pass 1).")
     window_s: float = Field(30.0, gt=1, description="Pass 1 window length; whole clips were refused (503).")
     stitch_gap_s: float = Field(1.0, ge=0, description="Join same verb/object/hand actions across window edges.")
+    stitch_mode: Literal["any", "boundary"] = Field(
+        "any", description="any = also merge same-label neighbours inside a window (original); boundary = only "
+                           "actions that meet at a window edge, matched on verb, hand and canonical object.")
+    prompt_version: Literal["v2-window", "v3-glossary"] = Field(
+        "v2-window", description="v3 adds verb definitions (SPEC A2), a hand rule and hands_visible instead of "
+                                 "the self-reported confidence (98% of v2 answers were 0.8 or 0.9).")
+    verb_glossary: dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_VERB_GLOSSARY))
+    structured_output: bool = Field(False, description="Constrain the answer with a JSON schema (verb/hand enums).")
+    pin_model: bool = Field(False, description="Use only gemini_model (no fallbacks) and key the cache by model, "
+                                               "so an experiment never mixes models silently.")
+    gemini_seed: int | None = Field(None, description="Sampling seed passed to the API (v3 only).")
+    drop_idle_items: bool = Field(False, description="Drop items the VLM marks as idle ('other' + 'nothing').")
     pass2: bool = False  # hurt on the dev clip (F1@10 35.3 -> 16.7); DECISIONS D15
     pass2_fps: float = Field(4.0, gt=0, le=24, description="Higher sampling for pass-2 windows.")
     pass2_window_s: float = Field(12.0, gt=1)
@@ -289,6 +342,12 @@ class VerifyConfig(_Strict):
     still_max_speed: float = Field(0.6, ge=0, description="Camera-units/s; above this a 'still' verb is suspect.")
     moving_verbs: list[str] = Field(default_factory=lambda: ["wipe", "push", "carry", "sand", "grind"])
     moving_min_speed: float = Field(0.03, ge=0)
+    correct_hand: bool = Field(True, description="Re-attribute a one-hand claim to the other, active hand.")
+    reject_needs_vlm_visible: bool = Field(False, description=(
+        "Reject (no hand seen) only when the VLM itself reports the hand visible (prompt v3 hands_visible=yes); "
+        "an action the VLM inferred without seeing the hand becomes unverified instead."))
+    drop_rejected: bool = Field(False, description=(
+        "Leave rejected actions out of actions.csv (the deliverable); actions.json keeps them for review."))
     snap: bool = True
     snap_window_s: float = Field(1.2, ge=0, description="Search +/- this for a motion valley (FORGE: 1-1.5 s).")
     min_len_after_snap_s: float = Field(0.4, ge=0)
@@ -304,14 +363,24 @@ class SOPConfig(_Strict):
 
 
 class TrimConfig(_Strict):
-    """Stage 10 smooth trim + compress (egovision/trim.py). Only after reviewer approval."""
+    """Stage 10 trim + compress (egovision/trim.py). Only after a reviewer approved the current plan.
 
-    pad_s: float = Field(1.5, ge=0, description="Pre/post-roll around every kept action.")
-    merge_gap_s: float = Field(4.0, ge=0, description="Kept segments closer than this are merged.")
-    lite_fps: float = Field(1.0, gt=0, description="Frame rate kept outside kept segments (keep-lite).")
+    Defaults measured on 29 clips (docs/RESULTS.md): the old pad 1.5 s / merge 4 s kept 100% of most clips,
+    so the trimmed file was a re-encode of the whole clip."""
+
+    mode: Literal["cut", "keep_lite"] = Field(
+        "cut", description="cut = remove idle stretches (shorter video + time map); keep_lite = same length, "
+                           "idle at lite_fps. The reviewer picks per run; this is the default choice.")
+    pad_s: float = Field(0.5, ge=0, description="Context kept before and after every action.")
+    min_idle_s: float = Field(2.0, ge=0, description="Only idle stretches at least this long are trimmed.")
+    drop_model_rejected: bool = Field(False, description=(
+        "Also trim Stage 7 'rejected' actions. Off: on the stone plant most of them are real work with the "
+        "hands out of view. Actions a reviewer rejected are always trimmed."))
+    lite_fps: float = Field(1.0, gt=0, description="Frame rate kept in idle stretches (keep_lite).")
     width: int = Field(854, ge=160, description="Output width (480p).")
-    codec: str = "libx265"
-    crf: int = Field(30, ge=0, le=51)
+    codec: str = Field("libx264", description="H.264 plays in every browser; libx265 is smaller but often does not.")
+    crf: int = Field(26, ge=0, le=51)
+    preset: str = "veryfast"
     out_dir: Path = Path("data/trimmed")
     require_approval: bool = True
 

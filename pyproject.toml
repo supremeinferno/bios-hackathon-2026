@@ -31,6 +31,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "ruff", "mypy", "types-PyYAML", "httpx"]
+# Optional RT-DETR hand detector for missed-hand recovery (hands.recover_detector="rtdetr", DECISIONS D16).
+# 1.26 is the last onnxruntime-gpu build for CUDA 12 (our torch is cu128); it also has the CPU provider.
+rtdetr = ["onnxruntime-gpu==1.26.0"]
 
 [project.scripts]
 egovision = "egovision.cli:app"
