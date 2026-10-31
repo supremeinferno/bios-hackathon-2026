@@ -85,6 +85,8 @@ def regions_from_detections(dets: list[ObjectDet], hands: list[Hand], w: int, h:
                 continue
             box = [box[0], box[1], box[2], box[1] + cfg.person_head_frac * (box[3] - box[1])]
             cat = "head"
+        if cat in ("head", "face") and box[1] > cfg.head_max_top_frac * h:
+            continue
         out.append(Region(category=cat, box=pad(box, cfg.pad_frac, w, h), score=d.score, source=d.label))
     return out
 
@@ -99,12 +101,20 @@ def pixelate(img: np.ndarray, block: int) -> np.ndarray:
     return cv2.resize(small, (ww, hh), interpolation=cv2.INTER_NEAREST)
 
 
-def frame_mask(shape: tuple[int, int], boxes: list[list[float]], keep: list[list[float]], s: float) -> np.ndarray:
+ROUND = ("head", "face")  # pixelated as ellipses: tighter around a head than a rectangle
+
+
+def frame_mask(shape: tuple[int, int], boxes: list[list[float]], keep: list[list[float]], s: float,
+               ellipse: list[bool] | None = None) -> np.ndarray:
     """Binary mask (1 = pixelate) at output scale `s`; `keep` boxes are cut out afterwards."""
     m = np.zeros(shape, np.uint8)
-    for b in boxes:
+    for k, b in enumerate(boxes):
         x1, y1, x2, y2 = (int(round(v * s)) for v in b)
-        m[max(0, y1):y2, max(0, x1):x2] = 1
+        if ellipse is not None and ellipse[k]:
+            cv2.ellipse(m, ((x1 + x2) // 2, (y1 + y2) // 2), (max(1, (x2 - x1) // 2), max(1, (y2 - y1) // 2)),
+                        0, 0, 360, 1, -1)
+        else:
+            m[max(0, y1):y2, max(0, x1):x2] = 1
     for b in keep:
         x1, y1, x2, y2 = (int(round(v * s)) for v in b)
         m[max(0, y1):y2, max(0, x1):x2] = 0
@@ -144,7 +154,8 @@ class Sanitizer:
                     continue
                 keep = hand_cutouts(hands[i].hands, self.cfg.hand_pad_frac, self.meta.width, self.meta.height) \
                     if self.cfg.protect_hands else []
-                m = frame_mask(img.shape[:2], [r.box for r in regions], [], s)
+                m = frame_mask(img.shape[:2], [r.box for r in regions], [], s,
+                               [r.category in ROUND for r in regions])
                 before = int(m.sum())
                 for b in keep:
                     x1, y1, x2, y2 = (int(round(v * s)) for v in b)

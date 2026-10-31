@@ -69,3 +69,10 @@ Chosen: one OWLv2 pass per keyframe with object + privacy prompts; person box ->
 35%), wearer's own arms filtered, pad 20%, hold +/-0.5 s, hands cut out of the mask, pixelation
 block 14 px. Keyframes every 0.33 s (was 0.5 s) for privacy coverage. No new model downloads.
 Gap: no dedicated OCR for small printed text.
+
+## D10 — Smaller privacy regions (Stage 1)
+Per-category breakdown of the first privacy run showed heads dominate and 15% start in the bottom
+30% of the frame (the wearer's own knees and feet). Changes: drop head/face regions with top edge
+below 70% of frame height; pad 20% -> 10%; person head band 35% -> 25%; heads/faces as ellipses;
+hold +/-0.5 s -> +/-0.35 s. Mean pixelated area (when blurring), first 40 s: SGF-021 15.3% -> 3.1%,
+000060-006 12.5% -> 8.7%. Checked frames: coworker faces still covered. See ERRORS_AND_FIXES #19.

@@ -28,11 +28,24 @@ def pick_encoder() -> str:
 
 
 def write_video(frames: Iterable[np.ndarray], out: str | Path, fps: float, bitrate: int = 2_500_000) -> str:
-    """Write BGR frames to an .mp4. Returns the encoder used."""
+    """Write BGR frames to an .mp4 atomically (temp file, renamed when complete). Returns the encoder used.
+
+    An interrupted run must never leave a half-written video that the UI could serve.
+    """
     enc = pick_encoder()
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    with av.open(str(out), mode="w") as container:
+    tmp = out.with_name(f".{out.stem}.partial{out.suffix}")
+    try:
+        _encode(frames, tmp, fps, bitrate, enc)
+        tmp.replace(out)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return enc
+
+
+def _encode(frames: Iterable[np.ndarray], out: Path, fps: float, bitrate: int, enc: str) -> None:
+    with av.open(str(out), mode="w", format="mp4") as container:
         stream = None
         for img in frames:
             if stream is None:
@@ -46,7 +59,6 @@ def write_video(frames: Iterable[np.ndarray], out: str | Path, fps: float, bitra
         if stream is not None:
             for pkt in stream.encode():
                 container.mux(pkt)
-    return enc
 
 
 def transcode(src: str, out: str | Path, width: int, fps: float, max_frames: int | None = None) -> str:

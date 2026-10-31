@@ -118,10 +118,13 @@ class PrivacyConfig(_Strict):
 
     enabled: bool = True
     prompts: list[VocabItem] = Field(default_factory=lambda: list(DEFAULT_PRIVACY_PROMPTS))
-    person_head_frac: float = Field(0.35, gt=0, le=1, description="Top share of a person box treated as head.")
-    pad_frac: float = Field(0.2, ge=0, description="Pad every region by this share of its size.")
-    hold_s: float = Field(0.5, ge=0, description="Apply each detection to frames within +/- this many seconds.")
+    person_head_frac: float = Field(0.25, gt=0, le=1, description="Top share of a person box treated as head.")
+    pad_frac: float = Field(0.1, ge=0, description="Pad every region by this share of its size.")
+    hold_s: float = Field(0.35, ge=0, description="Apply each detection to frames within +/- this many seconds.")
     drop_wearer_arms: bool = Field(True, description="Ignore 'person' boxes that are the wearer's own arms.")
+    head_max_top_frac: float = Field(0.7, gt=0, le=1, description=(
+        "Drop head/face regions whose top edge is below this share of the frame height: in head-camera "
+        "video those are the wearer's own knees/feet/body (docs/DECISIONS.md D10)."))
     protect_hands: bool = True
     hand_pad_frac: float = Field(0.08, ge=0)
     pixel_block: int = Field(14, ge=4, description="Pixelation block size in output pixels (bigger = stronger).")

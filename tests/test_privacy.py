@@ -24,7 +24,12 @@ def test_person_becomes_head_band_and_objects_are_ignored():
     regs = regions_from_detections([det("person", [100, 100, 300, 500]), det("sign", [10, 10, 50, 50]),
                                     ObjectDet(label="cloth", kind="portable", score=0.9, bbox=[0, 0, 5, 5])],
                                    [], W, H, CFG)
-    assert [(r.category, r.box) for r in regs] == [("head", [100, 100, 300, 240.0]), ("sign", [10, 10, 50, 50])]
+    assert [(r.category, r.box) for r in regs] == [("head", [100, 100, 300, 200.0]), ("sign", [10, 10, 50, 50])]
+
+
+def test_low_heads_are_the_wearer():
+    regs = regions_from_detections([det("head", [800, 900, 1000, 1080]), det("face", [800, 100, 900, 200])], [], W, H, CFG)
+    assert [r.category for r in regs] == ["face"]
 
 
 def test_wearer_arm_is_not_blurred():
@@ -37,9 +42,16 @@ def test_wearer_arm_is_not_blurred():
     assert len(regs) == 1 and regs[0].box[0] == 1500
 
 
+def test_heads_are_ellipses():
+    m = frame_mask((100, 100), [[10, 10, 90, 90], [0, 0, 100, 100]], [], 1.0, [True, False])
+    assert m[1, 1] == 1  # rectangle covers the corner
+    e = frame_mask((100, 100), [[10, 10, 90, 90]], [], 1.0, [True])
+    assert e[50, 50] == 1 and e[12, 12] == 0 and 0.45 < e.mean() < 0.55  # pi/4 of the 80x80 box
+
+
 def test_hold_window():
     s = Sanitizer.__new__(Sanitizer)
-    s.cfg, s.keys = PrivacyConfig(hold_s=0.5), []
+    s.cfg, s.keys = PrivacyConfig(hold_s=0.5), []  # explicit, default is 0.35
     s.meta = None
     from egovision.privacy import KeyRegions, Region
 
@@ -70,3 +82,16 @@ def test_sanitizer_writes_video(tmp_path: Path, synthetic_video: Path):
     assert len(san) == 20
     diff = np.abs(san[5].astype(int) - orig[5].astype(int))
     assert diff[30:90, 30:110].mean() > diff[105:, 125:].mean()  # changed inside the region, not outside
+
+
+def test_interrupted_write_leaves_no_file(tmp_path: Path):
+    from egovision.media import write_video
+
+    def frames():
+        yield np.zeros((64, 64, 3), np.uint8)
+        raise KeyboardInterrupt  # run stopped mid-write
+
+    out = tmp_path / "v.mp4"
+    with pytest.raises(KeyboardInterrupt):
+        write_video(frames(), out, 10)
+    assert list(tmp_path.iterdir()) == []

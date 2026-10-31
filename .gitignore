@@ -26,3 +26,9 @@ labels/*.local.*
 
 # Line-ending-safe: keep the jsonl outputs out even if copied elsewhere
 *.jsonl
+
+# Archives of the footage (e.g. data.zip with all clips): never commit
+*.zip
+*.7z
+*.tar
+*.tar.gz

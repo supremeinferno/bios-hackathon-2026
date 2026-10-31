@@ -31,6 +31,10 @@ measurement), **Repo** (git/data-rule hygiene), **Code** (bugs). Status: ✅ fix
 | 16 | Stage 1 | Env | Download of a second face model failed (connection reset) | Not retried; redesigned to use the detector we already had | ✅ |
 | 17 | Stage 1 | Code | Shell patch command failed on quoting (nothing was changed) | Wrote the patch as a Python file and ran that | ✅ |
 | 18 | Stage 1 | Code | Overlay canvas was sized 44 px shorter than the video | Canvas covers the full video area (`height: 100%`) | ✅ |
+| 19 | Stage 1 | Method | Privacy blur covered too much: 99% of frames, 15% of each frame on average; wearer's own knees blurred as "heads" | Drop heads low in the frame; smaller padding and head band; ellipses; shorter hold | ✅ |
+| 20 | Stage 1 | Code | A run stopped mid-write left a corrupt sanitized video that the UI could have served | Videos are now written to a temp file and renamed only when complete | ✅ |
+| 21 | Stage 1 | Model | Part of a company sign stays readable at the frame edge; false "person" boxes blur wooden panels | Open: flagged for the human privacy check | ⏳ |
+| 22 | Stage 1 | Model | When the wearer squats (SGF clips), their own knees and forearms mid-frame get pixelated; only the detected hand boxes stay sharp | Open: needs a better wearer-body filter | ⏳ |
 
 ## Details
 
@@ -148,3 +152,41 @@ measurement), **Repo** (git/data-rule hygiene), **Code** (bugs). Status: ✅ fix
   be drawn slightly above the hands.
 - **Fix.** The canvas now covers the full video area. The video's native controls stay clickable because the
   canvas ignores the mouse.
+
+### 19 · Over-blurring in the first privacy pass
+- **Symptom.** On `MTL-SGF00106-021`, 99.1% of frames had pixelation covering 15.3% of the frame on average.
+  Large wooden panels were pixelated, and the wearer's own knee and the area around the hand (bottom of
+  the frame) were pixelated as "heads".
+- **How we measured it.** Per-category breakdown of the privacy log: 1,835 head regions on 540 keyframes;
+  15% of them started in the bottom 30% of the frame.
+- **Root cause.** (a) In head-camera video, the wearer's own knees, feet and body sit at the bottom of the
+  frame and look like heads to the detector. (b) Generous geometry: 20% padding, head band = top 35% of a
+  person box, rectangles, ±0.5 s hold that smears boxes while the camera moves.
+- **Fix.** Drop head/face regions whose top edge is below 70% of the frame height; padding 20% → 10%; head
+  band 35% → 25%; heads and faces pixelated as ellipses; hold ±0.5 s → ±0.35 s (keyframes are 0.33 s
+  apart, so coverage stays continuous).
+- **Result (first 40 s, same clips).** Mean pixelated area when blurring: SGF-021 **15.3% → 3.1%**,
+  000060-006 **12.5% → 8.7%** (mostly the company sign). Coworker faces in the checked frames stay covered.
+  (DECISIONS D10)
+
+### 20 · Half-written sanitized video
+- **Symptom.** `Invalid data found when processing input: data/sanitized/mytronlabs-000003-002.mp4`.
+- **Root cause.** The run was stopped while the video was being written; the file was written in place, so
+  a truncated MP4 without its index was left behind, and the dashboard would have tried to stream it.
+- **Fix.** `write_video` writes to `.<name>.partial.mp4` and renames it only after the encoder is flushed;
+  on any error or interrupt the partial file is deleted. Unit test `test_interrupted_write_leaves_no_file`.
+
+### 21 · Remaining privacy misses (open) ⏳
+- **What.** In `mytronlabs-000060-006` at 25 s the main sign is pixelated, but a fragment of its text at the
+  right edge stays readable. In SGF-021 a wooden panel at the top is still pixelated by false "person" boxes.
+- **Plan.** Human privacy check on sampled frames (FORGE Stage 9); add OCR-based text detection if misses
+  persist. Until then, sanitized clips stay private like the originals.
+
+### 22 · Wearer's own body pixelated mid-frame (open) ⏳
+- **Symptom.** First dashboard check on `MTL-SGF00106-023` (30 s run from the UI): the worker squats, so the
+  knees, feet and forearms sit in the middle of the frame. They are pixelated as "person"/"head", and only
+  the two detected hand boxes stay sharp.
+- **Why the earlier fix missed it.** The bottom-of-frame rule (#19) only drops heads that start in the
+  lower 30%; a squatting wearer's knees start higher.
+- **Plan.** Treat person boxes that overlap a wearer hand track or the wearer's forearm direction as the
+  wearer, not just boxes touching the bottom edge; verify on SGF-023 and SGF-021.
