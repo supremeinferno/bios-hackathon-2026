@@ -71,7 +71,7 @@ def test_mask_cuts_out_hands_and_pixelation_changes_only_masked_pixels():
 def test_sanitizer_writes_video(tmp_path: Path, synthetic_video: Path):
     meta = probe(synthetic_video)
     s = Sanitizer(meta, PrivacyConfig(output_width=160, pixel_block=8, hold_s=0.2))
-    s.add(5, 0.5, [det("face", [20, 20, 120, 100])], [])
+    s.add(5, 0.5, [det("face", [40, 30, 90, 80])], [])  # realistic size: < 35% of the frame width
     hands = [FrameHands(frame=i, t=i / 10, hands=[]) for i in range(meta.n_frames)]
     out = tmp_path / "san.mp4"
     summary = s.write(hands, out)
@@ -81,7 +81,7 @@ def test_sanitizer_writes_video(tmp_path: Path, synthetic_video: Path):
     san = dict(iter_all_frames(str(out)))
     assert len(san) == 20
     diff = np.abs(san[5].astype(int) - orig[5].astype(int))
-    assert diff[30:90, 30:110].mean() > diff[105:, 125:].mean()  # changed inside the region, not outside
+    assert diff[35:75, 45:85].mean() > diff[100:, 125:].mean()  # changed inside the region, not outside
 
 
 def test_interrupted_write_leaves_no_file(tmp_path: Path):
@@ -95,3 +95,13 @@ def test_interrupted_write_leaves_no_file(tmp_path: Path):
     with pytest.raises(KeyboardInterrupt):
         write_video(frames(), out, 10)
     assert list(tmp_path.iterdir()) == []
+
+
+def test_wearer_body_head_rules():
+    from egovision.privacy import Region, keep_region
+
+    cfg = PrivacyConfig()
+    assert keep_region(Region("head", [900, 200, 1000, 320], 0.5, "x"), W, H, cfg)  # normal head
+    assert not keep_region(Region("head", [700, 730, 1200, 1080], 0.5, "x"), W, H, cfg)  # touches bottom edge
+    assert not keep_region(Region("head", [100, 740, 1240, 840], 0.5, "x"), W, H, cfg)  # 59% wide band
+    assert keep_region(Region("sign", [0, 900, 1900, 1080], 0.5, "x"), W, H, cfg)  # rules only for heads/faces

@@ -9,7 +9,6 @@ legitimately start or end mid-cycle; "missing" at the start or end of a clip is 
 from __future__ import annotations
 
 import json
-import re
 from collections import defaultdict
 from pathlib import Path
 from statistics import median
@@ -17,11 +16,11 @@ from typing import Any
 
 from egovision.config import SOPConfig
 from egovision.schema import Action
+from egovision.steps.postprocess import canonical_object
 
 
 def step_key(a: Action) -> str:
-    obj = re.sub(r"\s+", " ", a.object.lower()).strip() or "unknown"
-    return f"{a.verb}:{obj}"
+    return f"{a.verb}:{canonical_object(a.object)}"
 
 
 def sequence(actions: list[Action], cfg: SOPConfig) -> list[str]:

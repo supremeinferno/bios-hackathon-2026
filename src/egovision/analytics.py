@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 
 from egovision.schema import Action
+from egovision.steps.postprocess import canonical_object
 
 SIDES = ("left", "right")
 
@@ -32,7 +33,7 @@ def clip_analytics(actions: list[Action], signal_rows: list[dict[str, Any]], dur
     per_step: dict[str, list[float]] = defaultdict(list)
     for a in acts:
         per_verb[a.verb].append(a.end_s - a.start_s)
-        per_step[f"{a.verb}:{a.object}"].append(a.end_s - a.start_s)
+        per_step[f"{a.verb}:{canonical_object(a.object)}"].append(a.end_s - a.start_s)
     out: dict[str, Any] = {
         "frame": "camera", "duration_s": duration_s, "actions": len(acts),
         "time_per_verb_s": {v: {"total": round(sum(d), 1), "count": len(d), "mean": round(sum(d) / len(d), 2)}
@@ -64,7 +65,7 @@ def clip_analytics(actions: list[Action], signal_rows: list[dict[str, Any]], dur
     # repetitive cycles: most frequent step and its start-to-start interval
     if per_step:
         top, n = max(((k, len(v)) for k, v in per_step.items()), key=lambda kv: kv[1])
-        starts = sorted(a.start_s for a in acts if f"{a.verb}:{a.object}" == top)
+        starts = sorted(a.start_s for a in acts if f"{a.verb}:{canonical_object(a.object)}" == top)
         gaps = [b - a for a, b in zip(starts, starts[1:], strict=False)]
         out["cycles"] = {"step": top, "occurrences": n,
                          "median_cycle_s": round(median(gaps), 1) if gaps else None,

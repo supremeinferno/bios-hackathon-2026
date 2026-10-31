@@ -33,7 +33,7 @@ def fill_gaps(processed: list[FrameHands], n_frames: int, fps: float, max_gap: i
             w = (i - prev_i) / (next_i - prev_i)
             nxt = {h.id: h for h in by_frame[next_i].hands if h.id is not None}
             for a in by_frame[prev_i].hands:
-                b = nxt.get(a.id)
+                b = nxt.get(a.id) if a.id is not None else None
                 if b is None:
                     continue
                 hands.append(Hand(

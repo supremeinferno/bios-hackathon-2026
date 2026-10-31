@@ -91,9 +91,14 @@ def batch(
         try:
             r = run_video(v, out, cfg, render=render)
             summary.append({"clip": v.stem, "ok": True, **r.timings, **r.stats})
-        except (VideoError, RuntimeError, OSError, ValueError) as e:
-            log.error("batch: failed: %s: %s", v.name, e)
+        except VideoError as e:
+            log.error("batch: bad video %s: %s", v.name, e)
             summary.append({"clip": v.stem, "ok": False, "error": str(e)})
+        except Exception as e:  # noqa: BLE001 - one clip's failure must never stop the batch
+            log.exception("batch: failed: %s", v.name)
+            summary.append({"clip": v.stem, "ok": False, "error": f"{type(e).__name__}: {e}"})
+        (out / "batch_summary.json").parent.mkdir(parents=True, exist_ok=True)
+        (out / "batch_summary.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")  # progress
     out.mkdir(parents=True, exist_ok=True)
     (out / "batch_summary.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
     ok = sum(s["ok"] for s in summary)
@@ -164,6 +169,32 @@ def trim(
     info = run_trim(d, Path(r["sanitized"]), Path(r["meta"].path), apply_review(r["actions"], log),
                     r["meta"].duration_s, r["meta"].fps, cfg.trim)
     typer.echo(json.dumps({k: info[k] for k in ("trimmed_path", "kept_full_rate_pct", "size_mb")}, indent=1))
+
+
+@app.command()
+def resanitize(
+    clip: Annotated[str, typer.Option("--clip", help="Clip name, or 'all' for every clip with a privacy_log.json")],
+    out: Annotated[Path, typer.Option("--out", "-o")] = Path("outputs"),
+    config: ConfigOpt = None,
+    set_: SetOpt = [],  # noqa: B006
+    verbose: bool = False,
+) -> None:
+    """Stage 1: rebuild the sanitized video from privacy_log.json with the current rules (no re-detection)."""
+    _setup_logging(verbose)
+    from egovision.export import load_result
+    from egovision.privacy import Sanitizer
+
+    cfg = _load(config, set_, None)
+    dirs = sorted(p.parent for p in out.glob("*/privacy_log.json")) if clip == "all" else [out / clip]
+    for d in dirs:
+        r = load_result(d)
+        log = json.loads((d / "privacy_log.json").read_text(encoding="utf-8"))
+        san, dropped = Sanitizer.from_log(r["meta"], cfg.privacy, log)
+        dst = Path(r["sanitized"]) if r["sanitized"] else cfg.privacy.out_dir / f"{d.name}.mp4"
+        summary = san.write(r["hands"], dst)
+        (d / "privacy_log.json").write_text(json.dumps(san.log_record(summary), indent=1), encoding="utf-8")
+        typer.echo(f"{d.name}: dropped {dropped} regions by current rules; "
+                   f"blurred area {summary['mean_blurred_area_pct']}% of frame, regions {summary['regions_by_category']}")
 
 
 @app.command()

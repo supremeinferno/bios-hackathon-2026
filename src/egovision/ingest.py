@@ -13,6 +13,7 @@ import os
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import av
 import cv2
@@ -87,7 +88,7 @@ def decode_frames(path: str, size: tuple[int, int] | None = None, keep: set[int]
     try:
         s = c.streams.video[0]
         s.thread_type = "AUTO"
-        kw = {"width": size[0], "height": size[1], "interpolation": "AREA"} if size else {}
+        kw: dict[str, Any] = {"width": size[0], "height": size[1], "interpolation": "AREA"} if size else {}
         i = -1
         for i, f in enumerate(c.decode(s)):
             if last is not None and i > last:

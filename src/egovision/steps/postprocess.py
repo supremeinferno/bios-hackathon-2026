@@ -41,6 +41,30 @@ def normalise_object(o: str) -> str:
     return o or "unknown"
 
 
+_ADJ = {"wooden": "wood", "metallic": "metal", "plastic": "plastic"}
+_GENERIC = {"piece", "pieces", "part", "parts", "small", "large", "big", "some", "bit", "item"}
+
+
+def canonical_object(o: str) -> str:
+    """Grouping key for objects, e.g. 'wooden piece' == 'wood piece' == 'piece of wood' -> 'wood'.
+
+    Used to group steps (SOP templates, cycles); exported object names are left as the model wrote them.
+    """
+    t = normalise_object(o)
+    t = re.split(r" (?:to|with|on|into|onto|from|for|using|in) ", t)[0]
+    m = re.match(r"^(?:piece|pieces|bit|part) of (.+)$", t)
+    if m:
+        t = m.group(1)
+    words = []
+    for w in t.split():
+        w = _ADJ.get(w, w)
+        if len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
+            w = w[:-1]
+        words.append(w)
+    kept = [w for w in words if w not in _GENERIC] or words
+    return " ".join(kept) or "unknown"
+
+
 def clean(actions: list[Action], duration_s: float, min_len_s: float = 0.2) -> list[Action]:
     out = []
     for a in actions:

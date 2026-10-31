@@ -121,7 +121,7 @@ async function renderReview() {
   try { rv = await api(`/api/results/${state.clip}/review`); } catch (e) { el.innerHTML = `<p class="note">${esc(e.message)}</p>`; return; }
   const who = localStorage.getItem("reviewer") || "";
   const rows = rv.queue.map((a) => `<tr data-t="${a.start_s}" data-id="${esc(a.id)}">
-    <td>${statusPill(a.review ? a.review.status : null) || ""} ${a.review ? "" : statusPill(a.status)}<div class="flags">${esc((a.flags || []).join(", "))}</div></td>
+    <td>${a.review ? statusPill(a.review.status) : statusPill(a.status)}<div class="flags">${esc((a.flags || []).join(", "))}</div></td>
     <td>${fmt(a.start_s)}–${fmt(a.end_s)}</td><td>${esc(a.verb)}</td><td>${esc(a.object)}</td><td>${esc(a.hand)}</td>
     <td class="rv"><button data-op="approve" title="Approve">✓</button><button data-op="edit" title="Edit">✎</button>
       <button data-op="split" title="Split at playhead">✂</button><button data-op="merge" title="Merge with next">⊕</button>

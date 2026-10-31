@@ -48,6 +48,7 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM"]
 
 [tool.mypy]
 python_version = "3.12"
+plugins = ["pydantic.mypy"]
 ignore_missing_imports = true
 warn_unused_ignores = true
 files = ["src/egovision/config.py", "src/egovision/schema.py", "src/egovision/ingest.py", "src/egovision/hands/postprocess.py"]

@@ -85,10 +85,26 @@ def regions_from_detections(dets: list[ObjectDet], hands: list[Hand], w: int, h:
                 continue
             box = [box[0], box[1], box[2], box[1] + cfg.person_head_frac * (box[3] - box[1])]
             cat = "head"
-        if cat in ("head", "face") and box[1] > cfg.head_max_top_frac * h:
-            continue
-        out.append(Region(category=cat, box=pad(box, cfg.pad_frac, w, h), score=d.score, source=d.label))
+        r = Region(category=cat, box=pad(box, cfg.pad_frac, w, h), score=d.score, source=d.label)
+        if keep_region(r, w, h, cfg):
+            out.append(r)
     return out
+
+
+def keep_region(r: Region, w: int, h: int, cfg: PrivacyConfig) -> bool:
+    """Geometric sanity rules for head/face regions in head-camera video (ERRORS_AND_FIXES #19, #22, #33).
+
+    Drops what is almost always the wearer's own body: heads starting low in the frame, heads touching the
+    bottom edge, and "heads" wider than any real head (a band from a wrongly huge person box).
+    """
+    if r.category not in ("head", "face"):
+        return True
+    x1, y1, x2, y2 = r.box
+    if y1 > cfg.head_max_top_frac * h:
+        return False
+    if y2 >= cfg.head_bottom_edge_frac * h:
+        return False
+    return (x2 - x1) <= cfg.head_max_width_frac * w
 
 
 def hand_cutouts(hands: list[Hand], frac: float, w: int, h: int) -> list[list[float]]:
@@ -180,6 +196,19 @@ class Sanitizer:
             "frames_with_hands_protected": stats["frames_hands_protected"],
             "note": "Pixelation is an extra safety layer; the footage is still confidential (data-use rules).",
         }
+
+    @classmethod
+    def from_log(cls, meta: VideoMeta, cfg: PrivacyConfig, log: dict[str, Any]) -> tuple[Sanitizer, int]:
+        """Rebuild from a privacy_log.json (no re-detection) and apply the CURRENT geometric rules."""
+        s = cls(meta, cfg)
+        dropped = 0
+        for k in log.get("keyframe_regions", []):
+            regs = [Region(category=r["category"], box=r["box"], score=r["score"], source="log")
+                    for r in k["regions"]]
+            kept = [r for r in regs if keep_region(r, meta.width, meta.height, cfg)]
+            dropped += len(regs) - len(kept)
+            s.keys.append(KeyRegions(k["frame"], k["t"], kept))
+        return s, dropped
 
     def log_record(self, summary: dict[str, Any]) -> dict[str, Any]:
         return {**summary, "config": self.cfg.model_dump(mode="json"),

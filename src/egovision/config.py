@@ -91,7 +91,7 @@ class VocabItem(_Strict):
 
 
 def _v(name: str, prompt: str | None = None, kind: str = "portable") -> VocabItem:
-    return VocabItem(name=name, prompt=prompt or name, kind=kind)  # type: ignore[arg-type]
+    return VocabItem(name=name, prompt=prompt or name, kind=kind)
 
 
 # Object names come from what is visible in each recording source (docs/DATA_REPORT.md §4).
@@ -151,6 +151,8 @@ class PrivacyConfig(_Strict):
     head_max_top_frac: float = Field(0.7, gt=0, le=1, description=(
         "Drop head/face regions whose top edge is below this share of the frame height: in head-camera "
         "video those are the wearer's own knees/feet/body (docs/DECISIONS.md D10)."))
+    head_bottom_edge_frac: float = Field(0.97, gt=0, le=1, description="Head/face reaching this low = wearer's body.")
+    head_max_width_frac: float = Field(0.35, gt=0, le=1, description="Wider than this frame share = not a head.")
     protect_hands: bool = True
     hand_pad_frac: float = Field(0.08, ge=0)
     pixel_block: int = Field(14, ge=4, description="Pixelation block size in output pixels (bigger = stronger).")

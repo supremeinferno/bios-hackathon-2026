@@ -38,3 +38,13 @@ def test_sequence_drops_rejected_and_collapses_repeats():
     a = acts("pick:cloth", "pick:cloth", "wipe:slab")
     a[2] = a[2].model_copy(update={"status": "rejected"})
     assert sequence(a, CFG) == ["pick:cloth"]
+
+
+def test_canonical_object_groups_wording_variants():
+    from egovision.steps.postprocess import canonical_object
+
+    same = ["wooden piece", "wood piece", "piece of wood", "wooden pieces", "Wood Pieces", "the wooden piece"]
+    assert {canonical_object(o) for o in same} == {"wood"}
+    assert canonical_object("wood piece to furniture frame") == "wood"
+    assert canonical_object("wooden frame") == "wood frame" and canonical_object("piece of plywood") == "plywood"
+    assert canonical_object("glass") == "glass"  # 'ss' plural guard

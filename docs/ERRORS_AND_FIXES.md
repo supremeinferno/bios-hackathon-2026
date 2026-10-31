@@ -34,7 +34,7 @@ measurement), **Repo** (git/data-rule hygiene), **Code** (bugs). Status: ✅ fix
 | 19 | Stage 1 | Method | Privacy blur covered too much: 99% of frames, 15% of each frame on average; wearer's own knees blurred as "heads" | Drop heads low in the frame; smaller padding and head band; ellipses; shorter hold | ✅ |
 | 20 | Stage 1 | Code | A run stopped mid-write left a corrupt sanitized video that the UI could have served | Videos are now written to a temp file and renamed only when complete | ✅ |
 | 21 | Stage 1 | Model | Part of a company sign stays readable at the frame edge; false "person" boxes blur wooden panels | Open: flagged for the human privacy check | ⏳ |
-| 22 | Stage 1 | Model | When the wearer squats (SGF clips), their own knees and forearms mid-frame get pixelated; only the detected hand boxes stay sharp | Open: needs a better wearer-body filter | ⏳ |
+| 22 | Stage 1 | Model | When the wearer squats (SGF clips), their own knees and forearms mid-frame get pixelated; only the detected hand boxes stay sharp | Head regions touching the bottom edge or wider than 35% of the frame are dropped; `egovision resanitize` re-applies rules without re-detection (see #34) | ✅ |
 | 23 | Stage 1 | Method | Work objects (tools, printed templates, tape rolls, metal parts) were pixelated | Privacy limited to faces and company names; text/document/screen/monitor prompts removed | ✅ |
 | 24 | Stage 5 | Env | Gemini returned 503 "high demand" on every retry, and the failure crashed the whole run (hands, contacts lost) | Offline labeller always runs; Gemini is a layer on top that falls back to it | ✅ |
 | 25 | Stage 5 | Code | One Gemini request hung for 27 minutes with no timeout | 5-minute request timeout, then the next model | ✅ |
@@ -45,6 +45,11 @@ measurement), **Repo** (git/data-rule hygiene), **Code** (bugs). Status: ✅ fix
 | 30 | Stage 3 | Model | Missed-hand recovery (CLAHE retry) found conveyor rollers, a foot and forearms as "hands", for ≤1 point more presence at half the speed | Measured on 4 clips; recovery off by default | ✅ |
 | 31 | Stage 3 | Method | The coworker-hand filter dropped the wearer's OWN hand (fingers curled down near the camera) | Measured + visually checked; filter off by default | ✅ |
 | 32 | Stage 5 | Env | Free-tier quota for `gemini-3.5-flash` ran out during the 40-clip batch (429); every window then wasted ~20 s retrying it | Quota errors are not retried and the model is skipped for the rest of the run; batch clips are labelled by the fallback `gemini-flash-lite-latest`, recorded per clip | ⚠️ |
+| 33 | Batch | Code | Editing `src/` while the batch ran crashed it: the running process mixed the old config with a newly imported privacy module; and the batch stopped instead of skipping the clip | Batch runs from a frozen copy of the code; any per-clip exception is logged and the batch continues | ✅ |
+| 34 | Stage 1 | Model | Demo frames showed large pixelated blobs over the squatting worker's knees and hands ("heads" at 68% height touching the bottom edge, or 59% of the frame wide) | Two geometric rules for head regions; blurred area SGF-023 2.9% → 1.5%, coworker faces still covered | ✅ |
+| 35 | Stage 8 | Method | Step templates split one object into several ("wooden piece", "wood piece", "piece of wood") | `canonical_object` groups wording variants for templates and cycles; exported names unchanged | ✅ |
+| 36 | Audit | Code | mypy failed with 14 errors although tests passed | Pydantic mypy plugin enabled; two real typing issues fixed (optional id as dict key, untyped kwargs) | ✅ |
+| 37 | Audit | Code | Unreviewed rows in the dashboard Review tab showed "– rejected" | Show the review status if reviewed, else the model status | ✅ |
 
 ## Details
 
@@ -288,3 +293,22 @@ measurement), **Repo** (git/data-rule hygiene), **Code** (bugs). Status: ✅ fix
 - **Still open.** The measured quality (RESULTS §1) is for `gemini-3.5-flash`; most batch clips were labelled by
   `gemini-flash-lite-latest`, which we have not scored separately. Re-running those clips after the daily
   quota resets would align them (responses are cached per window, so only missing windows are re-asked).
+
+### 33 · Editing the code while the batch ran
+- **Symptom.** Restarted batch failed on its first clip: `AttributeError: 'PrivacyConfig' object has no attribute
+  'head_bottom_edge_frac'`, and the batch ended instead of continuing.
+- **Root cause.** The batch process imported `config.py` at start, but imports `privacy.py` lazily at the privacy stage;
+  that module had just been edited and read a field the already-loaded config class did not have. Separately, the
+  batch only caught a list of expected error types, so an unexpected one stopped everything.
+- **Fix.** The long batch runs from a frozen copy of `src/egovision` (`PYTHONPATH=artifacts/frozen`), so development can
+  continue; the batch catches any per-clip exception, logs the traceback, writes `batch_summary.json` after every clip,
+  and moves on. A 69-minute pause on clip 9 the night before was the laptop sleeping; the app now keeps it awake.
+
+### 34 · Wearer's body pixelated in the demo
+- **Symptom.** Test demo render (SGF-023, 20–28 s): large pixelated blobs over the lower middle of the frame.
+- **Root cause.** OWLv2 "head"/person boxes on the squatting wearer's knees: one starting at 68% height (just above
+  the 70% rule) and reaching the bottom edge, one 59% of the frame wide.
+- **Fix.** Head/face regions that reach the bottom edge (≥97% height) or are wider than 35% of the frame are dropped.
+  `egovision resanitize --clip <c>|all` rebuilds the sanitized video from `privacy_log.json` with the current rules,
+  without re-running detection. SGF-023: 72 regions dropped, blurred area 2.9% → 1.5%; SGF-021: 84 dropped, faces at
+  5, 30 and 150 s still covered (visual check).
