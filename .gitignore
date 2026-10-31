@@ -1,0 +1,20 @@
+# Data-use rules: never commit clips, frames or screenshots from the data
+data/
+artifacts/
+cache/
+*.mp4
+*.avi
+*.mov
+
+# Python / tooling
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+weights/
+.env
+
+# Organiser document: kept locally, not published in the public repo
+docs/problem_statement.pdf
