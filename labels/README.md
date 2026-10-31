@@ -10,6 +10,7 @@ carry this provenance.
 |---|---|---|---|
 | `mytronlabs-000060-016.actions.csv` | Action segments, 0–180 s | Drafted by Claude Code from 1 frame/s contact sheets | **No — pending team check** |
 | `MTL-SKL00089-007.actions.csv` | Action segments, 0–60 s only (see `.meta.json`) | Drafted by Claude Code from 1 frame/s sheets + zoomed frames | **No — pending team check** |
+| `dev/mytronlabs-000060-010.actions.csv` | Action segments, 0–60 s — **dev split, used for tuning decisions** | Drafted by Claude Code from 1 frame/s sheets, before any prediction for this clip was looked at | **No — pending team check** |
 | `hands_judged.csv` (when present) | Per-frame hand judgements from `scripts/make_judging_sheets.py` | Team | — |
 
 Until a teammate has checked the drafts against the video, scores from them are **indicative only**
@@ -24,7 +25,7 @@ that window. Actions of different hands may overlap; `both` covers both hand lan
 ## Splits
 
 - Held out for reporting (never used to tune anything): `mytronlabs-000060-016`, `MTL-SKL00089-007`.
-- Tuning: any other clip (none labelled yet).
+- Tuning (dev): `dev/mytronlabs-000060-010` (0–60 s). Score with `egovision eval --labels labels/dev`.
 
 ## How to check a draft
 

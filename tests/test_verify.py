@@ -75,3 +75,11 @@ def test_profile_hand_not_listed_becomes_unknown(tmp_path):
     out = verify_and_refine([A(hand="right")], rows(), [], CFG, prof)
     assert out[0].hand == "unknown" and "hand_not_in_profile:right" in out[0].flags
     assert load_profile(y, "other-clip").expected == ["left", "right"]  # falls back to default
+
+
+def test_no_snap_into_frames_where_the_hand_is_invisible():
+    r = rows(n=60)
+    for x in r[5:25]:  # right hand invisible from 0.5 s to 2.5 s
+        x["right_visible"], x["right_speed"] = 0, ""
+    a = snap_boundaries(A(s=1.5, e=4.0), Signals(r), CFG)
+    assert a.start_s == 1.5  # window around 1.5 s is mostly invisible -> boundary left alone

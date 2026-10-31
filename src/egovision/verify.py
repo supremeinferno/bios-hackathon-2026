@@ -30,6 +30,8 @@ class Signals:
         self.vis = {s: np.array([float(r[f"{s}_visible"] or 0) for r in rows]) for s in SIDES}
         self.speed = {s: np.array([float(r[f"{s}_speed"]) if r[f"{s}_speed"] not in ("", None) else 0.0 for r in rows])
                       for s in SIDES}
+        # a speed exists only when the hand was visible in this AND the previous sample
+        self.has_speed = {s: np.array([r[f"{s}_speed"] not in ("", None) for r in rows], dtype=bool) for s in SIDES}
 
     def window(self, a: float, b: float) -> np.ndarray:
         return (self.t >= a) & (self.t <= b)
@@ -112,7 +114,13 @@ def snap_boundaries(act: Action, sig: Signals, cfg: VerifyConfig) -> Action:
         w = sig.window(t - cfg.snap_window_s, t + cfg.snap_window_s)
         if w.sum() < 3:
             return t
+        # Only real speeds of the claimed hand(s) count. An invisible hand is NOT a still hand: before this
+        # fix, invisible samples read as speed 0 and pulled boundaries into gaps (ERRORS_AND_FIXES #28).
+        valid = np.all(np.stack([sig.has_speed[s][w] for s in hands]), axis=0)
+        if valid.mean() < cfg.snap_min_valid:
+            return t
         sp = np.max(np.stack([sig.speed[s][w] for s in hands]), axis=0)
+        sp = np.where(valid, sp, np.inf)
         return float(sig.t[w][int(np.argmin(sp))])
 
     s, e = snap(act.start_s), snap(act.end_s)

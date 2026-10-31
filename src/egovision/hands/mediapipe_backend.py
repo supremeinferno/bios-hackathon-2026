@@ -1,5 +1,5 @@
-"""MediaPipe Hand Landmarker (VIDEO mode) backend. Baseline per PDF step 3B, plus two FORGE Stage 3
-additions, both measured before being kept on (docs/DECISIONS.md D12):
+"""MediaPipe Hand Landmarker (VIDEO mode) backend. Baseline per PDF step 3B, plus two optional FORGE
+Stage 3 additions, both OFF by default after measurement (docs/DECISIONS.md D12):
   * recovery: when fewer hands than the worker profile expects are found, retry the frame once on a
     contrast-enhanced (CLAHE) copy with a separate IMAGE-mode landmarker; extra hands are `recovered`
   * other-person filter: drop hands whose fingers point down toward the camera from the upper part of

@@ -91,3 +91,32 @@ logo; OCR with a company-name list would close that gap.
 our key but 404s ("not available to new users", recommends 3.8-flash). Main model `gemini-3.8-flash`,
 fallbacks 3.7 -> 3.5 -> flash-latest, 300 s timeout, 4xx not retried. The offline exemplar matcher
 always runs and is used when Gemini fails, so a VLM outage never loses a run.
+
+## D14 — Gemini on 30 s windows, main model gemini-3.5-flash (Stage 5)
+Measured: full 3-min clips -> 503 on all models (two runs, ~1 h apart); 10 s sanitized clip -> 3.5-flash
+3.6 s, flash-lite-latest 2.9 s, 3.8-flash 178 s. So pass 1 uses 30 s windows; main model 3.5-flash,
+fallbacks flash-lite-latest then 3.8-flash; pass 2 re-asks windows around actions with verb "other" or
+confidence < 0.5 at 4 fps. First held-out result (000060-016, our draft labels): Gemini raw F1@50 45.9
+vs offline matcher 0.0 (the offline matcher depends on visible hands; ~15% of frames on this clip).
+
+## D12 — Stage 3 recovery and coworker filter: OFF by default (measured)
+`scripts/measure_hands.py`, first 60 s of SKL-005, 000060-016, SGF-036, 000003-002 (frames with a hand,
+baseline -> +recovery): 92.0->93.0, 11.8->11.8, 56.3->55.6, 90.4->90.4 %; hand-model fps roughly halves.
+Recovered "hands" include rollers, a foot and forearms. The coworker filter dropped 12 of the wearer's
+own hands on 000003-002. Both stay available in config; neither is used for results.
+
+## D15 — Step defaults chosen on the dev clip: Gemini pass 1 + verification + snapping; pass 2 off
+Dev clip `mytronlabs-000060-010` (0-60 s, 14 draft segments, labelled before any prediction was seen),
+`scripts/ablate_steps.py`:
+
+| variant | F1@10 | F1@25 | F1@50 | edit | hand acc | frame acc |
+|---|---|---|---|---|---|---|
+| offline matcher | 26.1 | 8.7 | 0.0 | 18.2 | 66.7 | 6.5 |
+| Gemini pass 1 | 35.3 | 17.6 | 11.8 | 33.2 | 41.7 | 22.6 |
+| Gemini pass 1 + pass 2 | 16.7 | 16.7 | 11.1 | 28.2 | 25.0 | 21.4 |
+| pass 1 + verify | 35.3 | 17.6 | 11.8 | 34.8 | 41.7 | 31.9 |
+| pass 1 + verify + snap | 35.3 | 17.6 | 11.8 | 34.8 | 41.7 | 31.9 |
+
+Pass 2 off; verification and snapping on (never worse on dev). Tiny sample: one minute, 14 segments.
+Disclosure: the snapping bug (ERRORS #28) was noticed on the held-out clip; the fix is a logic
+correction (missing != zero), not a tuned threshold. Held-out numbers are reported for raw and final.

@@ -40,6 +40,10 @@ measurement), **Repo** (git/data-rule hygiene), **Code** (bugs). Status: ✅ fix
 | 25 | Stage 5 | Code | One Gemini request hung for 27 minutes with no timeout | 5-minute request timeout, then the next model | ✅ |
 | 26 | Stage 5 | Env | `gemini-2.5-flash` is listed for our key but returns 404 "not available to new users"; retries were wasted on it | Model list set to the API's recommendation (3.8 → 3.7 → 3.5 → latest); 4xx errors are not retried | ✅ |
 | 27 | Stage 7 | Code | Verification checked hand presence before correcting the hand, so corrected actions came out "unverified" | Attribution first, then presence on the corrected hand (caught by a unit test) | ✅ |
+| 28 | Stage 8 | Code | Boundary snapping made Gemini's timeline worse (F1@50 45.9 → 26.2, boundary error 0.80 → 1.55 s) | Snap only to samples where the claimed hand is visible with a real speed; otherwise leave the boundary | ✅ |
+| 29 | Stage 5 | Env | Whole 3-minute clips: 503 on every Gemini model for over an hour; 10-second clips answered in 3.6 s | Gemini is called on 30 s windows (+ pass 2 around uncertain actions) | ✅ |
+| 30 | Stage 3 | Model | Missed-hand recovery (CLAHE retry) found conveyor rollers, a foot and forearms as "hands", for ≤1 point more presence at half the speed | Measured on 4 clips; recovery off by default | ✅ |
+| 31 | Stage 3 | Method | The coworker-hand filter dropped the wearer's OWN hand (fingers curled down near the camera) | Measured + visually checked; filter off by default | ✅ |
 
 ## Details
 
@@ -233,3 +237,42 @@ measurement), **Repo** (git/data-rule hygiene), **Code** (bugs). Status: ✅ fix
   but status `unverified` instead of `corrected`.
 - **Root cause.** The presence check ran on the originally claimed (wrong) hand before the correction.
 - **Fix.** Attribution first, then presence and motion checks on the corrected hand.
+
+### 28 · Boundary snapping pulled boundaries into "hand not visible" gaps
+- **Symptom.** First scored run on held-out `mytronlabs-000060-016`: Gemini raw F1@50 = 45.9 and boundary
+  error 0.80 s; after Stage 7–8 the same timeline scored F1@50 = 26.2 and 1.55 s.
+- **Root cause.** `signals.csv` leaves speed empty when a hand is not visible, and the snapping code read
+  empty as 0, i.e. "perfectly still". On a clip where hands are visible in only ~15% of frames, the
+  "slowest moment" was almost always a moment with no hand at all.
+- **Fix.** Snap only to samples where the claimed hand(s) have a real speed, and only when that holds for
+  ≥60% of the ±1.2 s window; otherwise keep the boundary. Unit test
+  `test_no_snap_into_frames_where_the_hand_is_invisible`.
+- **Result (same held-out clip).** Snapping is now neutral (F1@50 42.6 with or without snapping; boundary
+  error 0.83 s vs 0.80 s raw). The remaining drop vs raw comes from Stage 7's hand correction on this clip
+  (hand accuracy 66.7 → 55.6), whose evidence is weak when the tracker misses most hands. The on/off
+  decision is made on the dev clip, not on this held-out one (DECISIONS D15).
+- **Lesson.** "Missing" is not "zero". A refinement stage needs its own before/after measurement.
+
+### 29 · Gemini refuses whole clips, answers short windows
+- **Symptom.** Two full runs: every model (3.8, 3.7, 3.5, flash-latest) returned 503 "high demand" for a
+  3-minute clip. A tiny text request and a 10-second clip both answered within seconds on `gemini-3.5-flash`.
+- **Fix.** 30-second windows (one decode pass cuts them all), times shifted back to clip time, actions
+  stitched across window edges, pass 2 re-asks windows around uncertain actions at 4 fps. First windowed
+  run: 6 windows → 33 actions, one transient 503 recovered by retry. (DECISIONS D14)
+
+### 30 · Missed-hand recovery mostly added false hands
+- **Measured** (first 60 s of 4 clips, `scripts/measure_hands.py`): frames with a hand 92.0 → 93.0% (SKL-005),
+  11.8 → 11.8% (000060-016), 56.3 → 55.6% (SGF-036), 90.4 → 90.4% (000003-002); hand-model speed
+  35–50 fps → 18–22 fps.
+- **Visual check of recovered hands:** stone plant: 7 of 12 were pink conveyor rollers, 2 forearms;
+  bench clip: one was the wearer's foot, two were forearms.
+- **Decision.** `hands.recover = false` (kept as an option). (DECISIONS D12)
+
+### 31 · Coworker filter removed the wearer's own hand
+- **Rule.** Drop a hand whose fingers point down toward the camera from the upper part of the frame
+  (a coworker facing the wearer).
+- **Visual check.** On `mytronlabs-000003-002` all 12 dropped hands were the wearer's own hand, held close to
+  the lens with fingers curled (wristband and red shirt visible). On 000060-016 the 5 drops were rollers.
+- **Decision.** `hands.filter_other_person = false`. Coworker hands remain a known limitation.
+- **Lesson.** A geometric rule that "makes sense" for egocentric video was wrong on our footage; measure
+  and look before switching anything on.

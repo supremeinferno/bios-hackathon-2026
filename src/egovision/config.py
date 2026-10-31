@@ -60,10 +60,12 @@ class HandsConfig(_Strict):
     # do NOT: swapping put 79% of hands on the wrong half of the image (docs/DECISIONS.md D4).
     swap_handedness: bool = False
     # Stage 3 additions (hands/mediapipe_backend.py; measured in docs/DECISIONS.md D12)
-    recover: bool = True
+    # Both OFF after measurement (DECISIONS D12): recovery +0-1 pt presence at half the speed and added
+    # false hands (rollers, feet); the coworker rule dropped the wearer's own hands.
+    recover: bool = False
     recover_clahe_clip: float = Field(3.0, gt=0, description="CLAHE clip limit for the retry copy.")
     recover_min_score: float = Field(0.6, ge=0, le=1, description="Min handedness score for a recovered hand.")
-    filter_other_person: bool = True
+    filter_other_person: bool = False
     other_person_min_down: float = Field(0.25, ge=0, description="Wrist->knuckle downward extent / hand size.")
     other_person_max_wrist_y: float = Field(0.55, gt=0, le=1, description="Only hands with wrist above this frame share.")
     glove_threshold_drop: float = Field(0.15, ge=0, le=0.5, description="Lower detection threshold when gloved.")
@@ -261,7 +263,7 @@ class StepsConfig(_Strict):
     video_fps: float = Field(2.0, gt=0, le=24, description="Frames/s Gemini samples from the video (pass 1).")
     window_s: float = Field(30.0, gt=1, description="Pass 1 window length; whole clips were refused (503).")
     stitch_gap_s: float = Field(1.0, ge=0, description="Join same verb/object/hand actions across window edges.")
-    pass2: bool = True
+    pass2: bool = False  # hurt on the dev clip (F1@10 35.3 -> 16.7); DECISIONS D15
     pass2_fps: float = Field(4.0, gt=0, le=24, description="Higher sampling for pass-2 windows.")
     pass2_window_s: float = Field(12.0, gt=1)
     pass2_min_confidence: float = Field(0.5, ge=0, le=1, description="Re-ask windows around actions below this.")
@@ -288,6 +290,7 @@ class VerifyConfig(_Strict):
     snap: bool = True
     snap_window_s: float = Field(1.2, ge=0, description="Search +/- this for a motion valley (FORGE: 1-1.5 s).")
     min_len_after_snap_s: float = Field(0.4, ge=0)
+    snap_min_valid: float = Field(0.6, ge=0, le=1, description="Snap only if the hand has a speed in this share of the window.")
 
 
 class SOPConfig(_Strict):
