@@ -121,17 +121,23 @@ def run_video(video: str | Path, out_root: str | Path, cfg: Config, render: bool
     timings["tracking_s"] = round(time.perf_counter() - t0, 2)
     log.info("tracking: %d track ids", len({h.id for fh in tracked for h in fh.hands}))
 
-    # ---- Stage: objects + keyframe features (one batched pass over keyframes) -------------
+    # ---- Stage: objects + privacy detections + keyframe features (one batched pass) --------
     t0 = time.perf_counter()
     steps_backend = make_steps(cfg.steps, device)
     key_idx = keyframe_indices(src, cfg.objects.every_s)
     detector = None
-    if cfg.objects.enabled:
+    vocab = (cfg.objects.vocab_for(meta.name) if cfg.objects.enabled else []) + \
+        (list(cfg.privacy.prompts) if cfg.privacy.enabled else [])
+    if vocab:
         from egovision.objects import OpenVocabDetector
 
         detector = OpenVocabDetector(cfg.objects, device)
-    vocab = cfg.objects.vocab_for(meta.name)
-    log.info("objects: %d keyframes, %d prompts (%s)", len(key_idx), len(vocab), ", ".join(v.name for v in vocab))
+    sanitizer = None
+    if cfg.privacy.enabled:
+        from egovision.privacy import Sanitizer
+
+        sanitizer = Sanitizer(meta_full, cfg.privacy)
+    log.info("keyframes: %d, %d prompts (%s)", len(key_idx), len(vocab), ", ".join(v.name for v in vocab))
     from egovision.objects import associate, contact_segments
 
     lag = max(1, int(round(cfg.steps.speed_lag_s * meta.fps)))
@@ -148,8 +154,11 @@ def run_video(video: str | Path, out_root: str | Path, cfg: Config, render: bool
         dets = detector.detect([f.image for f in batch], vocab, 1 / src.scale) if detector else [[] for _ in batch]
         t_det += time.perf_counter() - td
         crops, owners = [], []
-        for f, objs in zip(batch, dets, strict=True):
+        for f, all_dets in zip(batch, dets, strict=True):
             fh = filled[f.index]
+            objs = [d for d in all_dets if d.kind != "privacy"]
+            if sanitizer is not None:
+                sanitizer.add(f.index, round(f.t, 3), [d for d in all_dets if d.kind == "privacy"], fh.hands)
             contacts = associate(fh.hands, objs, cfg.objects)
             frame_objects.append(FrameObjects(frame=f.index, t=round(f.t, 3), objects=objs, contacts=contacts))
             kf = KeyframeFeatures(frame=f.index, t=round(f.t, 3), objects=objs)
@@ -186,9 +195,23 @@ def run_video(video: str | Path, out_root: str | Path, cfg: Config, render: bool
     timings.update(objects_s=round(t_det, 2), objects_fps=round(nk / max(t_det, 1e-9), 1),
                    embed_s=round(t_emb, 2), keyframe_pass_s=round(time.perf_counter() - t0, 2))
 
+    # ---- Stage 1: privacy sanitization (sanitized copy for API, UI, demos) -----------------
+    sanitized: Path | None = None
+    privacy_summary: dict[str, Any] = {"enabled": False}
+    if sanitizer is not None:
+        t0 = time.perf_counter()
+        report("privacy", 0.0)
+        sanitized = cfg.privacy.out_dir / f"{meta.name}.mp4"
+        privacy_summary = sanitizer.write(filled, sanitized)
+        (out_dir / "privacy_log.json").write_text(json.dumps(sanitizer.log_record(privacy_summary), indent=1),
+                                                  encoding="utf-8")
+        timings["privacy_s"] = round(time.perf_counter() - t0, 2)
+        log.info("privacy: %s", {k: v for k, v in privacy_summary.items() if k != "note"})
+
     # ---- Stage: steps ---------------------------------------------------------------------
     t0 = time.perf_counter()
     report("steps", 0.0)
+    steps_backend.source_video = sanitized  # type: ignore[attr-defined]  # only sanitized video leaves the machine
     actions = clean(steps_backend.segment(meta, filled, keyframes, contacts), meta.duration_s)
     timings["steps_s"] = round(time.perf_counter() - t0, 2)
 
@@ -197,11 +220,11 @@ def run_video(video: str | Path, out_root: str | Path, cfg: Config, render: bool
                  keyframes_with_contact_pct=round(100 * sum(any(c.state != "none" for c in fo.contacts)
                                                             for fo in frame_objects) / nk, 1),
                  contact_segments=len(contacts), actions=len(actions), steps_backend=steps_backend.name,
-                 device=device)
+                 device=device, privacy=privacy_summary)
 
     # ---- Export -----------------------------------------------------------------------------
     t0 = time.perf_counter()
-    write_outputs(out_dir, meta, filled, frame_objects, contacts, actions, keyframes)
+    write_outputs(out_dir, meta, filled, frame_objects, contacts, actions, keyframes, sanitized)
     timings["export_s"] = round(time.perf_counter() - t0, 2)
     t_render = 0.0
     if cfg.render.enabled if render is None else render:
@@ -209,7 +232,8 @@ def run_video(video: str | Path, out_root: str | Path, cfg: Config, render: bool
 
         report("render", 0.0)
         t0 = time.perf_counter()
-        enc = render_overlay(meta, filled, frame_objects, actions, cfg.steps.verbs, cfg.render, out_dir / "overlay.mp4")
+        enc = render_overlay(meta, filled, frame_objects, actions, cfg.steps.verbs, cfg.render,
+                             out_dir / "overlay.mp4", source=sanitized)
         t_render = time.perf_counter() - t0
         log.info("render: overlay.mp4 written with encoder %s", enc)
     timings["render_s"] = round(t_render, 2)

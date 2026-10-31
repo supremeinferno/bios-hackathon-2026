@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FORGE · Task-step timeline</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="logo">◆</span>
+      <div>
+        <h1>FORGE · Task-step timeline</h1>
+        <p>Head-camera factory video → hands, held objects, task steps (PS3)</p>
+      </div>
+    </div>
+    <div class="badges">
+      <span class="badge ok" title="The UI only streams the pixelated (sanitized) copy">🔒 Sanitized video only</span>
+      <span class="badge" id="health">server …</span>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="side">
+      <section class="card">
+        <h2>Clips</h2>
+        <input id="clipFilter" type="search" placeholder="Filter clips…">
+        <ul id="clipList" class="clips"></ul>
+        <label class="upload">
+          <input id="uploadInput" type="file" accept="video/mp4">
+          <span>⬆ Upload .mp4</span>
+        </label>
+      </section>
+
+      <section class="card">
+        <h2>Run pipeline</h2>
+        <div class="field"><label for="maxSec">First N seconds (0 = all)</label><input id="maxSec" type="number" min="0" step="10" value="30"></div>
+        <div class="field"><label for="stride">Hand-model frame stride</label>
+          <select id="stride"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></div>
+        <label class="check"><input id="optObjects" type="checkbox" checked> Objects + contacts</label>
+        <label class="check"><input id="optPrivacy" type="checkbox" checked> Privacy sanitization</label>
+        <button id="runBtn" class="primary" disabled>▶ Run on selected clip</button>
+        <ul id="jobList" class="jobs"></ul>
+      </section>
+    </aside>
+
+    <main class="main">
+      <section class="card player-card">
+        <div class="player-head">
+          <h2 id="clipTitle">Pick a clip</h2>
+          <div class="toggles">
+            <label><input type="checkbox" data-layer="hands" checked> Hands</label>
+            <label><input type="checkbox" data-layer="keypoints" checked> Keypoints</label>
+            <label><input type="checkbox" data-layer="objects"> Objects</label>
+            <label><input type="checkbox" data-layer="held" checked> Held</label>
+          </div>
+        </div>
+        <div id="stage" class="stage">
+          <video id="video" controls playsinline preload="metadata"></video>
+          <canvas id="overlay"></canvas>
+          <div id="nowStep" class="now-step"></div>
+          <div id="emptyMsg" class="empty">Select a clip with results, or run the pipeline.</div>
+        </div>
+        <div class="timeline-wrap">
+          <canvas id="timeline" height="76"></canvas>
+          <div id="tooltip" class="tooltip"></div>
+        </div>
+        <div id="legend" class="legend"></div>
+      </section>
+
+      <section class="card">
+        <div id="stats" class="stats"></div>
+      </section>
+
+      <section class="card">
+        <nav class="tabs">
+          <button data-tab="actions" class="active">Actions</button>
+          <button data-tab="contacts">Contacts</button>
+          <button data-tab="tracking">Hand tracking</button>
+          <button data-tab="privacy">Privacy</button>
+          <button data-tab="eval">Evaluation</button>
+          <button data-tab="downloads">Downloads</button>
+        </nav>
+        <div id="tab-actions" class="tab active"></div>
+        <div id="tab-contacts" class="tab"></div>
+        <div id="tab-tracking" class="tab"></div>
+        <div id="tab-privacy" class="tab"></div>
+        <div id="tab-eval" class="tab"></div>
+        <div id="tab-downloads" class="tab"></div>
+      </section>
+    </main>
+  </div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

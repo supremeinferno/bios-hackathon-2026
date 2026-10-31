@@ -50,7 +50,7 @@ class OpenVocabDetector:
         # OWLv2 pads images to a square at the bottom/right: boxes are relative to that square.
         sizes = torch.tensor([[max(im.shape[:2])] * 2 for im in batch], device=self.device)
         res = self.processor.post_process_grounded_object_detection(
-            outputs=outputs, threshold=self.cfg.score_threshold, target_sizes=sizes)
+            outputs=outputs, threshold=self._floor(vocab), target_sizes=sizes)
         return [[(int(lab), float(s), b.tolist()) for s, lab, b in zip(r["scores"], r["labels"], r["boxes"], strict=True)]
                 for r in res]
 
@@ -60,7 +60,7 @@ class OpenVocabDetector:
         inputs["pixel_values"] = inputs["pixel_values"].to(self.dtype)
         outputs = self.model(**inputs)
         res = self.processor.post_process_grounded_object_detection(
-            outputs, inputs["input_ids"], threshold=self.cfg.score_threshold, text_threshold=self.cfg.score_threshold,
+            outputs, inputs["input_ids"], threshold=self._floor(vocab), text_threshold=self._floor(vocab),
             target_sizes=[im.shape[:2] for im in batch])
         prompts = [v.prompt.lower() for v in vocab]
         out = []
@@ -75,6 +75,10 @@ class OpenVocabDetector:
             out.append(dets)
         return out
 
+    def _floor(self, vocab: list[VocabItem]) -> float:
+        """Lowest threshold any prompt asks for; per-item thresholds are applied in _filter."""
+        return min([self.cfg.score_threshold] + [v.min_score for v in vocab if v.min_score is not None])
+
     def _filter(self, dets: list[tuple[int, float, list[float]]], vocab: list[VocabItem], w: int, h: int,
                 to_orig: float) -> list[ObjectDet]:
         kept: list[ObjectDet] = []
@@ -83,6 +87,8 @@ class OpenVocabDetector:
             if x2 <= x1 or y2 <= y1:
                 continue
             item = vocab[idx]
+            if score < (item.min_score if item.min_score is not None else self.cfg.score_threshold):
+                continue
             if item.kind == "portable" and (x2 - x1) * (y2 - y1) > self.cfg.max_area_frac * w * h:
                 continue  # a "portable" box covering a third of the frame is almost always wrong
             box_o = [x1 * to_orig, y1 * to_orig, x2 * to_orig, y2 * to_orig]

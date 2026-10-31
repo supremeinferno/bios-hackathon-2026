@@ -94,11 +94,13 @@ def load_result(out_dir: Path) -> dict[str, Any]:
         "contacts": [ContactSegment.model_validate(c) for c in r["contacts"]],
         "actions": [Action.model_validate(a) for a in r["actions"]],
         "run": json.loads(run.read_text(encoding="utf-8")) if run.is_file() else {},
+        "sanitized": r.get("files", {}).get("sanitized_video"),
     }
 
 
 def write_outputs(out_dir: Path, meta: VideoMeta, hands: list[FrameHands], objects: list[FrameObjects],
-                  contacts: list[ContactSegment], actions: list[Action], keyframes: list[Any]) -> None:
+                  contacts: list[ContactSegment], actions: list[Action], keyframes: list[Any],
+                  sanitized: Path | None = None) -> None:
     write_hands_jsonl(hands, out_dir / "hands.jsonl")
     write_actions_csv(actions, out_dir / "actions.csv")
     write_contacts_csv(contacts, out_dir / "contacts.csv")
@@ -106,7 +108,8 @@ def write_outputs(out_dir: Path, meta: VideoMeta, hands: list[FrameHands], objec
     result = {
         "clip": meta.name,
         "video": meta.model_dump(),
-        "files": {"hands": "hands.jsonl", "actions": "actions.csv", "contacts": "contacts.csv"},
+        "files": {"hands": "hands.jsonl", "actions": "actions.csv", "contacts": "contacts.csv",
+                  "sanitized_video": sanitized.as_posix() if sanitized else None},
         "keyframes": [fo.model_dump() for fo in objects],
         "contacts": [c.model_dump() for c in contacts],
         "actions": [a.model_dump() for a in actions],

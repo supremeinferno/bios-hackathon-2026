@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import subprocess
-import sys
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -121,11 +119,13 @@ def eval_(
 
 
 @app.command()
-def ui(port: int = 8501) -> None:
-    """Start the Streamlit demo UI."""
-    app_file = Path(__file__).with_name("ui.py")
-    raise typer.Exit(subprocess.call([sys.executable, "-m", "streamlit", "run", str(app_file),
-                                      "--server.port", str(port), "--server.headless", "true"]))
+def ui(host: str = "127.0.0.1", port: int = 8000, verbose: bool = False) -> None:
+    """Start the dashboard (FastAPI + JS) at http://HOST:PORT. Localhost by default: footage is confidential."""
+    _setup_logging(verbose)
+    import uvicorn
+
+    typer.echo(f"egovision dashboard -> http://{host}:{port}")
+    uvicorn.run("egovision.api:app", host=host, port=port, log_level="info" if verbose else "warning")
 
 
 if __name__ == "__main__":

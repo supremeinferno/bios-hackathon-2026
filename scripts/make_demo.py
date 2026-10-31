@@ -35,7 +35,10 @@ def part_frames(out_root: Path, clip: str, start: float, dur: float, width: int)
     f0, f1 = int(start * meta.fps), min(len(hands), int((start + dur) * meta.fps))
     keys = [fo.frame for fo in objects]
     title = None
-    for i, img in iter_all_frames(meta.path, width, f1 - 1):
+    src = r["sanitized"] if r["sanitized"] and Path(r["sanitized"]).is_file() else None
+    if src is None:
+        print(f"warning: no sanitized copy for {clip}; rendering the ORIGINAL (keep it private)", file=sys.stderr)
+    for i, img in iter_all_frames(src or meta.path, width, f1 - 1):
         if i < f0:
             continue
         if title is None:  # 1.5 s title card in the clip's own frame size

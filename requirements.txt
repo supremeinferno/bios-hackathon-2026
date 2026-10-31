@@ -1,0 +1,39 @@
+# Pinned to the versions verified on our laptop (Windows 11, Python 3.12.10, RTX 3050 4 GB).
+# Install:  python -m pip install -r requirements.txt && python -m pip install -e . --no-deps
+# PyTorch CUDA wheels come from the PyTorch index (CPU-only machines: drop the +cu128 suffix
+# and the --extra-index-url line; everything falls back to CPU automatically).
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+# video + hands
+av==19.0.2
+opencv-python==5.0.0.93
+mediapipe==1.2.0
+numpy==2.5.4
+scipy==1.18.1
+
+# objects (OWLv2), privacy, step embeddings (SigLIP)
+torch==2.11.0+cu128
+torchvision==0.26.0+cu128
+transformers==5.22.1
+accelerate==1.15.0
+sentencepiece==0.2.2
+protobuf==7.36.2
+
+# config, CLI, API + dashboard
+pydantic==2.14.2
+PyYAML==6.0.3
+typer==0.27.3
+fastapi==0.162.0
+uvicorn==0.54.0
+python-multipart==0.0.32
+python-dotenv==1.2.4
+
+# optional: Gemini step backend (needs GEMINI_API_KEY in .env)
+google-genai==2.34.0
+
+# dev
+pytest==9.2.0
+httpx==0.28.1
+ruff==0.17.3
+mypy==2.4.1
+types-PyYAML==6.0.12.20261030

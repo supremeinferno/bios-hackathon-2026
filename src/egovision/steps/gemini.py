@@ -52,6 +52,7 @@ class GeminiSteps:
 
         self.cfg = cfg
         self.client = genai.Client(api_key=key)
+        self.source_video: Path | None = None  # set by the pipeline to the sanitized copy
 
     def _cache_file(self, meta: VideoMeta, prompt: str) -> Path:
         st = os.stat(meta.path)
@@ -80,9 +81,17 @@ class GeminiSteps:
         from google.genai import types
 
         small = self.cfg.cache_dir / meta.name / f"upload_w{self.cfg.upload_width}_n{meta.n_frames}.mp4"
+        src = self.source_video
+        if src is None:
+            if not self.cfg.allow_unsanitized_upload:
+                raise RuntimeError("privacy: no sanitized copy of this clip, refusing to upload the original "
+                                   "(enable privacy, or set steps.allow_unsanitized_upload=true deliberately)")
+            src = Path(meta.path)
+        tag = "san" if self.source_video else "orig"
+        small = small.with_name(f"{small.stem}_{tag}.mp4")
         if not small.is_file():
-            log.info("actions: transcoding %s to width %d for upload", meta.name, self.cfg.upload_width)
-            transcode(meta.path, small, self.cfg.upload_width, meta.fps, max_frames=meta.n_frames)
+            log.info("steps: transcoding %s (%s) to width %d for upload", meta.name, tag, self.cfg.upload_width)
+            transcode(str(src), small, self.cfg.upload_width, meta.fps, max_frames=meta.n_frames)
         uploaded = None
         try:
             uploaded = self._retry(lambda: self.client.files.upload(file=str(small)))

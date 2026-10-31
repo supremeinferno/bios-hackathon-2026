@@ -54,7 +54,8 @@ def main() -> int:
         uni = list(range(0, n, max(1, n // a.per_clip)))[: a.per_clip - a.per_clip // 2]
         pick = sorted(set(uni) | set(rng.sample(hard, min(len(hard), a.per_clip // 2))))
         tiles = []
-        for i, img in decode_frames(meta.path, (TILE_W, int(round(meta.height * TILE_W / meta.width))), set(pick)):
+        src = r["sanitized"] if r["sanitized"] and Path(r["sanitized"]).is_file() else meta.path
+        for i, img in decode_frames(src, (TILE_W, int(round(meta.height * TILE_W / meta.width))), set(pick)):
             draw_frame(img, hands[i], None, [], i / meta.fps, TILE_W / meta.width, cfg)
             cv2.putText(img, f"#{len(rows) + len(tiles)}  {clip} f{i}", (8, img.shape[0] - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)

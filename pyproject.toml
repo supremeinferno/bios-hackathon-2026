@@ -19,8 +19,14 @@ dependencies = [
     "typer",
     "google-genai",
     "fastapi",
-    "uvicorn[standard]",
+    "uvicorn",
     "python-multipart",
+    "python-dotenv",
+    "torch",
+    "torchvision",
+    "transformers>=5",
+    "sentencepiece",
+    "protobuf",
 ]
 
 [project.optional-dependencies]

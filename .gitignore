@@ -23,3 +23,6 @@ docs/problem_statement.pdf
 outputs/
 labels/*.local.*
 *.egg-info/
+
+# Line-ending-safe: keep the jsonl outputs out even if copied elsewhere
+*.jsonl

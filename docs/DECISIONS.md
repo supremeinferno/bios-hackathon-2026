@@ -54,3 +54,18 @@ Same 8 keyframes (2 per source), same per-source prompts, RTX 3050 4 GB, fp16, b
 OWLv2 chosen: 3.5x faster and its per-prompt scores are cleaner. Threshold raised 0.15 -> 0.2
 to cut the noise floor. Licence: Apache-2.0 for both. Grounding DINO stays selectable via
 `objects.model`.
+
+## D9 — Stage 1 privacy uses OWLv2 "person" boxes, not a face detector (Stage 1)
+Benchmark on 10 frames with known coworker faces, a company sign, a document and phone screens:
+
+| detector | speed | result |
+|---|---|---|
+| MediaPipe Face (short-range) | 141 img/s | found 1 close face; missed all distant faces; **false boxes on hands/arms** in 3 frames |
+| OWLv2 "human face" | 7.4 img/s (shared pass) | found 2 coworker faces + a face on a phone screen; missed most |
+| OWLv2 "person" / "human head" | same pass | "person" found nearly every coworker (incl. small/distant); "head" found several heads |
+| OWLv2 sign / document / screen | same pass | "SHARP QUEEN" sign 0.17-0.19, paper document 0.41, phone screens 0.28-0.37 |
+
+Chosen: one OWLv2 pass per keyframe with object + privacy prompts; person box -> head band (top
+35%), wearer's own arms filtered, pad 20%, hold +/-0.5 s, hands cut out of the mask, pixelation
+block 14 px. Keyframes every 0.33 s (was 0.5 s) for privacy coverage. No new model downloads.
+Gap: no dedicated OCR for small printed text.

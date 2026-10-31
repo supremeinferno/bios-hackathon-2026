@@ -62,7 +62,7 @@ CONTACTS_CSV_COLUMNS = ["clip", "t_start", "t_end", "hand", "state", "object_nam
 
 class ObjectDet(BaseModel):
     label: str
-    kind: Literal["portable", "fixed"]
+    kind: Literal["portable", "fixed", "privacy"]
     score: float = Field(ge=0, le=1)
     bbox: list[float]  # original pixels
 

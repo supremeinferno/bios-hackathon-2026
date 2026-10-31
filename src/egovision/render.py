@@ -83,7 +83,8 @@ def draw_frame(img: np.ndarray, fh: FrameHands, fo: FrameObjects | None, now: li
 
 def render_overlay(meta: VideoMeta, hands: list[FrameHands], objects: list[FrameObjects], actions: list[Action],
                    verbs: list[str], cfg: RenderConfig, out: Path, start_frame: int = 0,
-                   end_frame: int | None = None) -> str:
+                   end_frame: int | None = None, source: Path | None = None) -> str:
+    """Draw on the sanitized copy when one exists (FORGE: demos never show unsanitized footage)."""
     colors = verb_colors(verbs)
     s = cfg.width / meta.width
     duration = len(hands) / meta.fps if hands else meta.duration_s
@@ -92,7 +93,7 @@ def render_overlay(meta: VideoMeta, hands: list[FrameHands], objects: list[Frame
     last = min(len(hands), end_frame if end_frame is not None else len(hands)) - 1
 
     def frames() -> Iterator[np.ndarray]:
-        for i, img in iter_all_frames(meta.path, cfg.width, last):
+        for i, img in iter_all_frames(str(source) if source else meta.path, cfg.width, last):
             if i < start_frame:
                 continue
             t = i / meta.fps

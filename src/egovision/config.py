@@ -59,7 +59,8 @@ class HandsConfig(_Strict):
 class VocabItem(_Strict):
     name: str  # canonical object name used in outputs
     prompt: str  # text sent to the open-vocabulary detector
-    kind: Literal["portable", "fixed"] = "portable"
+    kind: Literal["portable", "fixed", "privacy"] = "portable"
+    min_score: float | None = Field(None, ge=0, le=1, description="Per-item threshold (default: global).")
 
 
 def _v(name: str, prompt: str | None = None, kind: str = "portable") -> VocabItem:
@@ -93,10 +94,45 @@ DEFAULT_VOCAB: dict[str, list[VocabItem]] = {
 }
 
 
+def _p(category: str, prompt: str, min_score: float) -> VocabItem:
+    return VocabItem(name=f"privacy:{category}", prompt=prompt, kind="privacy", min_score=min_score)
+
+
+# Stage 1 privacy prompts for the same OWLv2 pass. Measured on 10 frames with known faces, signs,
+# documents and screens (docs/DECISIONS.md D9): "person" finds nearly every coworker, "face" alone
+# misses most, so heads are blurred from person boxes too.
+DEFAULT_PRIVACY_PROMPTS: list[VocabItem] = [
+    _p("person", "person", 0.15), _p("head", "human head", 0.15), _p("face", "human face", 0.15),
+    _p("sign", "signboard with company name", 0.15), _p("logo", "company logo", 0.2),
+    _p("text", "printed text", 0.2), _p("screen", "phone screen", 0.2), _p("screen", "computer monitor", 0.25),
+    _p("document", "paper document", 0.2),
+]
+
+
+class PrivacyConfig(_Strict):
+    """Stage 1: blur people's heads, signage/logos/text, screens and documents in a sanitized copy.
+
+    The sanitized copy is what goes to cloud APIs, the UI and demos. Hand tracking runs on originals.
+    Blurring is an extra safety layer; it does NOT make footage publishable (PDF data-use rules).
+    """
+
+    enabled: bool = True
+    prompts: list[VocabItem] = Field(default_factory=lambda: list(DEFAULT_PRIVACY_PROMPTS))
+    person_head_frac: float = Field(0.35, gt=0, le=1, description="Top share of a person box treated as head.")
+    pad_frac: float = Field(0.2, ge=0, description="Pad every region by this share of its size.")
+    hold_s: float = Field(0.5, ge=0, description="Apply each detection to frames within +/- this many seconds.")
+    drop_wearer_arms: bool = Field(True, description="Ignore 'person' boxes that are the wearer's own arms.")
+    protect_hands: bool = True
+    hand_pad_frac: float = Field(0.08, ge=0)
+    pixel_block: int = Field(14, ge=4, description="Pixelation block size in output pixels (bigger = stronger).")
+    output_width: int = Field(960, ge=160)
+    out_dir: Path = Path("data/sanitized")
+
+
 class ObjectsConfig(_Strict):
     enabled: bool = True
     model: str = "google/owlv2-base-patch16-ensemble"
-    every_s: float = Field(0.5, gt=0, description="Run the detector on one processed frame per this many seconds.")
+    every_s: float = Field(0.33, gt=0, description="Run the detector on one processed frame per this many seconds.")
     score_threshold: float = Field(0.2, ge=0, le=1)
     nms_iou: float = Field(0.5, gt=0, le=1)
     max_area_frac: float = Field(0.35, gt=0, le=1, description="Drop portable boxes larger than this frame share.")
@@ -195,6 +231,7 @@ class StepsConfig(_Strict):
     max_retries: int = Field(4, ge=0)
     cache_dir: Path = Path("cache/api")
     delete_uploads: bool = True  # data-use rule: remove uploaded clips from API storage
+    allow_unsanitized_upload: bool = Field(False, description="FORGE Stage 1: only sanitized copies go to the API.")
 
 
 class RenderConfig(_Strict):
@@ -212,6 +249,7 @@ class Config(_Strict):
     ingest: IngestConfig = Field(default_factory=IngestConfig)
     hands: HandsConfig = Field(default_factory=HandsConfig)
     objects: ObjectsConfig = Field(default_factory=ObjectsConfig)
+    privacy: PrivacyConfig = Field(default_factory=PrivacyConfig)
     steps: StepsConfig = Field(default_factory=StepsConfig)
     render: RenderConfig = Field(default_factory=RenderConfig)
 
