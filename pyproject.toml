@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "egovision"
+version = "0.1.0"
+description = "Egocentric factory video -> hand tracks and task-step timelines (Egocentric Vision Hackathon, PS3)"
+requires-python = ">=3.11"
+readme = "README.md"
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "av",
+    "mediapipe",
+    "pydantic>=2",
+    "pyyaml",
+    "scipy",
+    "typer",
+    "google-genai",
+    "fastapi",
+    "uvicorn[standard]",
+    "python-multipart",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "mypy", "types-PyYAML", "httpx"]
+
+[project.scripts]
+egovision = "egovision.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+warn_unused_ignores = true
+files = ["src/egovision/config.py", "src/egovision/schema.py", "src/egovision/ingest.py", "src/egovision/hands/postprocess.py"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["smoke: end-to-end run on a real 10-second clip (needs data/raw and weights)"]

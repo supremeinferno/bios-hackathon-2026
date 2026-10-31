@@ -17,3 +17,15 @@ inspection. **Revisit** when hand-level blur is measured in Phase 1.
 Measured: 163 fps decode-only vs 57 fps decode+convert+resize, and 280 ms per random seek (HEVC
 1080p, i5-12450H). So stages read from a frame cache, skipped frames are `grab()`ed rather than
 decoded and converted, and random seeks stay out of the hot path.
+
+## D4 — Do not swap MediaPipe handedness (M1)
+PDF p.11 says MediaPipe labels hands as if the image were a mirrored selfie, so labels "may need
+swapping". On `MTL-SKL00089-005` (full clip, 4,039 detections) with the swap ON, only 20.6% of
+"left" hands had their wrist on the left half of the image (and "right" on the right half).
+Visual check of 4 frames with both hands showed every label reversed. With MediaPipe 1.2.0 the
+raw labels are already correct for our non-mirrored head-camera video. `swap_handedness=False`.
+`run.json` keeps reporting `side_matches_image_half_pct` per clip as a regression check.
+
+## D5 — Ingest decodes with PyAV, not OpenCV (Block 1)
+Same clip, decode + scale to 960x540: PyAV (threaded decode, swscale resize in `to_ndarray`)
+357 fps vs OpenCV 5.0 (`read` + `cv2.resize`) 106 fps. PyAV also gives exact frame timestamps.

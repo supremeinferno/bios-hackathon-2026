@@ -18,3 +18,8 @@ weights/
 
 # Organiser document: kept locally, not published in the public repo
 docs/problem_statement.pdf
+
+# Pipeline outputs are derived from the company footage: keep them out of the public repo
+outputs/
+labels/*.local.*
+*.egg-info/
