@@ -239,11 +239,13 @@ def run_video(video: str | Path, out_root: str | Path, cfg: Config, render: bool
     report("steps", 0.0)
     offline_actions = clean(steps_backend.segment(meta, filled, keyframes, contacts), meta.duration_s)
     actions, used, vlm_actions, vlm_error = offline_actions, steps_backend.name, None, None
+    vlm_models: dict[str, int] = {}
     if vlm is not None:
         vlm.source_video = sanitized  # type: ignore[attr-defined]  # only sanitized video leaves the machine
         try:
             vlm_actions = clean(vlm.segment(meta, filled, keyframes, contacts), meta.duration_s)
             actions, used = vlm_actions, f"{vlm.name}:{getattr(vlm, 'model_used', '')}"
+            vlm_models = dict(getattr(vlm, "models_used", {}))
         except Exception as e:  # noqa: BLE001 - a VLM outage must not lose the rest of the run
             vlm_error = f"{type(e).__name__}: {e}"[:500]
             log.error("steps: %s failed, using the offline timeline instead: %s", vlm.name, vlm_error)
@@ -276,7 +278,8 @@ def run_video(video: str | Path, out_root: str | Path, cfg: Config, render: bool
                  keyframes_with_contact_pct=round(100 * sum(any(c.state != "none" for c in fo.contacts)
                                                             for fo in frame_objects) / nk, 1),
                  contact_segments=len(contacts), actions=len(actions), steps_backend=used,
-                 steps_requested=cfg.steps.backend, vlm_error=vlm_error, verification=status_counts(actions),
+                 steps_requested=cfg.steps.backend, vlm_error=vlm_error, vlm_windows_by_model=vlm_models,
+                 verification=status_counts(actions),
                  device=device, privacy=privacy_summary)
 
     # ---- Export -----------------------------------------------------------------------------

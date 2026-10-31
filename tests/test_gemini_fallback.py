@@ -30,7 +30,7 @@ class FakeClient:
 def _backend(tmp_path: Path, client) -> GeminiSteps:
     g = GeminiSteps.__new__(GeminiSteps)
     g.cfg = StepsConfig(cache_dir=tmp_path, max_retries=0, gemini_model="main", gemini_fallback_models=["fb1", "fb2"])
-    g.client, g.model_used, g.models_used = client, None, {}
+    g.client, g.model_used, g.models_used, g.exhausted = client, None, {}, set()
     g.source_video = tmp_path / "san.mp4"
     return g
 
@@ -80,3 +80,24 @@ def test_windows_stitch_and_pass2_targets():
     cfg = StepsConfig(pass2_window_s=10, pass2_max_windows=5)
     t = pass2_targets([A(10, 12, verb="other"), A(13, 14, conf=0.3), A(50, 52)], 60, cfg)
     assert t == [(6.0, 18.5)]  # two uncertain actions merged into one window; the confident one ignored
+
+
+def test_quota_exhausted_model_is_skipped_for_the_rest_of_the_run(tmp_path: Path):
+    class Quota(Exception):
+        code = 429
+
+    c = FakeClient(set())
+    calls = []
+
+    def gen(model, contents, config):
+        calls.append(model)
+        if model == "main":
+            raise Quota("429 RESOURCE_EXHAUSTED: You exceeded your current quota")
+        return SimpleNamespace(text="[]")
+
+    c.models = SimpleNamespace(generate_content=gen)
+    g = _backend(tmp_path, c)
+    g.cfg = g.cfg.model_copy(update={"max_retries": 2})
+    g._ask(tmp_path / "w.mp4", "p", 2.0)
+    g._ask(tmp_path / "w.mp4", "p", 2.0)
+    assert calls == ["main", "fb1", "fb1"]  # quota hit once, no retries, then skipped

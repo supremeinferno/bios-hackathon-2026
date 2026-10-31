@@ -105,6 +105,7 @@ class GeminiSteps:
                                    http_options=types.HttpOptions(timeout=int(cfg.request_timeout_s * 1000)))
         self.model_used: str | None = None
         self.models_used: dict[str, int] = {}
+        self.exhausted: set[str] = set()  # models that reported 429 quota exhaustion: skipped for this run
         self.source_video: Path | None = None  # set by the pipeline to the sanitized copy
 
     # ---- orchestration ----------------------------------------------------------------------
@@ -198,6 +199,8 @@ class GeminiSteps:
                               video_metadata=types.VideoMetadata(fps=fps))
             errors: list[str] = []
             for model in [self.cfg.gemini_model, *self.cfg.gemini_fallback_models]:
+                if model in self.exhausted:
+                    continue
                 try:
                     resp = self._retry(lambda m=model: self.client.models.generate_content(
                         model=m, contents=[part, prompt],
@@ -207,6 +210,8 @@ class GeminiSteps:
                         log.warning("steps: answered by fallback model %s", model)
                     return resp.text or "[]", model
                 except Exception as e:  # noqa: BLE001 - overload/timeout: try the next model
+                    if getattr(e, "code", None) == 429 and "quota" in str(e).lower():
+                        self.exhausted.add(model)  # daily/free-tier quota: retrying later in this run is futile
                     errors.append(f"{model}: {type(e).__name__}: {str(e)[:120]}")
                     log.warning("steps: model %s failed (%s); trying next model", model, str(e)[:160])
             raise RuntimeError("all Gemini models failed: " + " | ".join(errors))
@@ -223,7 +228,8 @@ class GeminiSteps:
                 return fn()
             except Exception as e:  # noqa: BLE001 - SDK raises varied network/rate-limit errors
                 code = getattr(e, "code", None)
-                if attempt == self.cfg.max_retries or (isinstance(code, int) and 400 <= code < 500 and code != 429):
+                quota = code == 429 and "quota" in str(e).lower()
+                if attempt == self.cfg.max_retries or quota or (isinstance(code, int) and 400 <= code < 500 and code != 429):
                     raise  # 4xx (except rate limit) never succeeds on retry: move on
                 wait = 5 * 2**attempt
                 log.warning("steps: Gemini call failed (%s); retry %d in %ds", str(e)[:160], attempt + 1, wait)

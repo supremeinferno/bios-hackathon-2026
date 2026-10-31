@@ -44,6 +44,7 @@ measurement), **Repo** (git/data-rule hygiene), **Code** (bugs). Status: ✅ fix
 | 29 | Stage 5 | Env | Whole 3-minute clips: 503 on every Gemini model for over an hour; 10-second clips answered in 3.6 s | Gemini is called on 30 s windows (+ pass 2 around uncertain actions) | ✅ |
 | 30 | Stage 3 | Model | Missed-hand recovery (CLAHE retry) found conveyor rollers, a foot and forearms as "hands", for ≤1 point more presence at half the speed | Measured on 4 clips; recovery off by default | ✅ |
 | 31 | Stage 3 | Method | The coworker-hand filter dropped the wearer's OWN hand (fingers curled down near the camera) | Measured + visually checked; filter off by default | ✅ |
+| 32 | Stage 5 | Env | Free-tier quota for `gemini-3.5-flash` ran out during the 40-clip batch (429); every window then wasted ~20 s retrying it | Quota errors are not retried and the model is skipped for the rest of the run; batch clips are labelled by the fallback `gemini-flash-lite-latest`, recorded per clip | ⚠️ |
 
 ## Details
 
@@ -276,3 +277,14 @@ measurement), **Repo** (git/data-rule hygiene), **Code** (bugs). Status: ✅ fix
 - **Decision.** `hands.filter_other_person = false`. Coworker hands remain a known limitation.
 - **Lesson.** A geometric rule that "makes sense" for egocentric video was wrong on our footage; measure
   and look before switching anything on.
+
+### 32 · Free-tier quota ran out mid-batch ⚠️
+- **Symptom.** `429 RESOURCE_EXHAUSTED: You exceeded your current quota` for `gemini-3.5-flash` from the
+  first batch clips on (earlier dev/held-out runs had used part of the free daily quota).
+- **What happened.** The model fallback worked: windows were answered by `gemini-flash-lite-latest`. But each
+  window first retried the exhausted model 3 times (~20 s wasted per window).
+- **Fix.** A 429 that mentions "quota" is not retried, and that model is skipped for the rest of the run.
+  `run.json` now records `vlm_windows_by_model`, so every clip says which model labelled it.
+- **Still open.** The measured quality (RESULTS §1) is for `gemini-3.5-flash`; most batch clips were labelled by
+  `gemini-flash-lite-latest`, which we have not scored separately. Re-running those clips after the daily
+  quota resets would align them (responses are cached per window, so only missing windows are re-asked).
