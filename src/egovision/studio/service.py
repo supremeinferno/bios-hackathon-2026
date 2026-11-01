@@ -149,6 +149,33 @@ class Studio:
     def hands3d_dir(self, video_id: str) -> Path:
         return self.video_dir(video_id) / "hands3d"
 
+    def hands2d_source(self, video_id: str) -> tuple[Path, str, int, int] | None:
+        """Where this video's 2D hand tracks are and the frame size their pixels refer to, best first: FORGE tracks
+        from an offline run of this video, FORGE tracks of the same clip (imported videos, or an upload of the same
+        clip, possibly at another resolution), then the 3D job's 2D keypoints (every 2nd frame, no track ids)."""
+        v = self.db.get_video(video_id)
+        if v is None:
+            raise KeyError(video_id)
+        def forge_dir(d: Path) -> tuple[Path, str, int, int] | None:
+            if not (d / "hands.jsonl").is_file() or not (d / "result.json").is_file():
+                return None
+            meta = json.loads((d / "result.json").read_text(encoding="utf-8"))["video"]
+            return d / "hands.jsonl", "forge", int(meta["width"]), int(meta["height"])
+
+        found = forge_dir(self.video_dir(video_id) / "forge")
+        res = offline.forge_result(self.s, v["filename"], v["duration_s"] or 0.0)
+        if found is None and res is not None:
+            found = forge_dir(res["dir"])
+        if found is not None:
+            return found
+        h3d = self.hands3d_dir(video_id) / "hands3d.jsonl"
+        if h3d.is_file():
+            with open(h3d, encoding="utf-8") as f:
+                first = next((json.loads(line) for line in f if '"kp2d"' in line), None)
+            if first is not None:
+                return h3d, "hands3d", v["width"], v["height"]
+        return None
+
     def submit_hands3d(self, video_id: str) -> dict[str, Any]:
         v = self.db.get_video(video_id)
         if v is None:
