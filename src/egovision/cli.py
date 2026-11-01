@@ -145,30 +145,37 @@ def sop(
 def trim(
     clip: Annotated[str, typer.Option("--clip", help="Clip name (results in OUT/<clip>/)")],
     out: Annotated[Path, typer.Option("--out", "-o")] = Path("outputs"),
+    mode: Annotated[str | None, typer.Option(help="cut (shorter video) or keep_lite (same length); default: config")] = None,  # noqa: UP007
     force: Annotated[bool, typer.Option(help="Trim without a reviewer's approve_trim decision")] = False,
     config: ConfigOpt = None,
     set_: SetOpt = [],  # noqa: B006
     verbose: bool = False,
 ) -> None:
-    """Stage 10: smooth trim + compress the sanitized copy (needs the reviewer's trim approval)."""
+    """Stage 10: trim + compress the sanitized copy (needs the reviewer's approval of the current plan)."""
     _setup_logging(verbose)
     from egovision.export import load_result
-    from egovision.review import apply_review, load_log
-    from egovision.trim import run_trim
+    from egovision.review import apply_review, load_log, trim_approved
+    from egovision.trim import MODES, plan, plan_sha, run_trim
 
+    if mode is not None and mode not in MODES:
+        typer.echo(f"refused: --mode must be one of {', '.join(MODES)}")
+        raise typer.Exit(code=2)
     cfg = _load(config, set_, None)
     d = out / clip
     r = load_result(d)
     log = load_log(d)
-    if cfg.trim.require_approval and not force and not any(x.op == "approve_trim" for x in log):
-        typer.echo("refused: the trim plan has not been approved in review (or pass --force)")
+    acts = apply_review(r["actions"], log)
+    sha = plan_sha(plan(acts, r["meta"].duration_s, cfg.trim))
+    if cfg.trim.require_approval and not force and not trim_approved(log, sha):
+        typer.echo("refused: the current trim plan has not been approved in review (or pass --force)")
         raise typer.Exit(code=2)
     if not r["sanitized"] or not Path(r["sanitized"]).is_file():
         typer.echo("refused: no sanitized copy (trimming only ever works on the sanitized video)")
         raise typer.Exit(code=2)
-    info = run_trim(d, Path(r["sanitized"]), Path(r["meta"].path), apply_review(r["actions"], log),
-                    r["meta"].duration_s, r["meta"].fps, cfg.trim)
-    typer.echo(json.dumps({k: info[k] for k in ("trimmed_path", "kept_full_rate_pct", "size_mb")}, indent=1))
+    info = run_trim(d, Path(r["sanitized"]), Path(r["meta"].path), acts, r["meta"].duration_s, r["meta"].fps,
+                    cfg.trim, mode)  # type: ignore[arg-type]
+    typer.echo(json.dumps({k: info[k] for k in ("mode", "trimmed_path", "kept_pct", "output_duration_s", "size_mb")},
+                          indent=1))
 
 
 @app.command()
@@ -205,6 +212,41 @@ def ui(host: str = "127.0.0.1", port: int = 8000, verbose: bool = False) -> None
 
     typer.echo(f"egovision dashboard -> http://{host}:{port}")
     uvicorn.run("egovision.api:app", host=host, port=port, log_level="info" if verbose else "warning")
+
+
+@app.command()
+def hands3d(video: Annotated[Path, typer.Option(help="Clip to process")],
+            out: Annotated[Path, typer.Option(help="Output folder")] = Path("outputs"),
+            config: ConfigOpt = None, set_: SetOpt = [],  # noqa: B006 - typer list option
+            max_seconds: MaxSecOpt = None, verbose: bool = False) -> None:
+    """Approximate 3D hands in camera (head) coordinates: <out>/<clip>/hands3d.jsonl + hands3d_summary.json.
+
+    Monocular and uncalibrated (assumed fisheye FOV `hands3d.hfov_deg`); see egovision/hands3d.py.
+    """
+    _setup_logging(verbose)
+    from egovision import hands3d as h3
+
+    cfg = Config.load(config, set_)
+    frames, summary = h3.compute(video, cfg, max_seconds=max_seconds)
+    path = h3.write(frames, summary, out / video.stem)
+    typer.echo(f"{path}: {summary['frames']} frames, {summary['frames_with_hand_pct']}% with a hand, "
+               f"median distance {summary['median_dist_m']} m (approximate)")
+
+
+@app.command()
+def studio(host: str = "127.0.0.1", port: int = 8010, verbose: bool = False) -> None:
+    """Start the Studio (upload a video, live Gemini analysis, worker analytics) at http://HOST:PORT.
+
+    Uses GEMINI_API_KEY from .env; without it, the offline FORGE labeller. Settings: STUDIO_* env vars
+    (egovision/studio/settings.py).
+    """
+    _setup_logging(verbose)
+    logging.getLogger("egovision").setLevel(logging.INFO)
+    import uvicorn
+
+    typer.echo(f"egovision studio -> http://{host}:{port}")
+    uvicorn.run("egovision.studio.api:create_app", factory=True, host=host, port=port,
+                log_level="info" if verbose else "warning")
 
 
 if __name__ == "__main__":

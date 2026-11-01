@@ -1,0 +1,3 @@
+# O0: offline step labeller as it is (no exemplars, contact-only objects), dev clip 0-60 s. Reference for O1-O3.
+steps:
+  backend: exemplar

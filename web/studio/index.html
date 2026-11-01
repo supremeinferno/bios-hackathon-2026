@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FORGE Studio · Industrial task analysis</title>
+  <link rel="stylesheet" href="studio.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="logo">◆</span>
+      <div>
+        <h1>FORGE Studio · Industrial task analysis</h1>
+        <p>Upload a video → Gemini reads timestamped frames (offline FORGE labeller as fallback) → validated events, worker analytics and reports from the backend</p>
+      </div>
+    </div>
+    <div class="badges">
+      <span class="badge" id="aiBadge">analyser …</span>
+      <span class="badge" id="liveBadge" title="Live connection to the backend for the selected video">live: –</span>
+      <span class="badge" id="healthBadge">server …</span>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="side">
+      <section class="card">
+        <h2>Upload video</h2>
+        <label id="drop" class="drop">
+          <input id="fileInput" type="file" accept="video/*,.mp4,.mov,.avi,.mkv,.webm,.m4v">
+          <b>Drop a video here</b><span>or click to choose a file from your computer</span>
+        </label>
+        <div id="fileInfo" class="note"></div>
+        <div class="field"><label for="labelInput">Label (optional)</label><input id="labelInput" type="text" maxlength="120" placeholder="e.g. Line 3 · station B · morning shift"></div>
+        <button id="uploadBtn" class="primary" disabled>⬆ Upload to backend</button>
+        <div id="uploadBar" class="bar hidden"><i></i></div>
+        <div id="uploadMsg" class="note"></div>
+      </section>
+
+      <section class="card">
+        <h2>Import FORGE results</h2>
+        <p class="note">Clips the FORGE pipeline already processed (outputs/&lt;clip&gt;). Imported as a finished analysis: no API, no GPU.</p>
+        <div class="import-row"><select id="forgeClip"></select><button id="importBtn" disabled>Import</button></div>
+        <div id="importMsg" class="note"></div>
+      </section>
+
+      <section class="card">
+        <div class="row-head"><h2>Videos in backend storage</h2><button id="refreshVideos" class="ghost" title="Reload list">↻</button></div>
+        <ul id="videoList" class="videos"></ul>
+      </section>
+    </aside>
+
+    <main class="main">
+      <div class="grid2">
+        <section class="card">
+          <div class="row-head">
+            <h2 id="videoTitle">No video selected</h2>
+            <button id="deleteBtn" class="ghost danger hidden" title="Delete the video, its events and reports from the backend">Delete</button>
+          </div>
+          <div id="videoMeta" class="meta"></div>
+          <div class="stage">
+            <video id="player" controls playsinline preload="metadata"></video>
+            <div id="playerMsg" class="player-msg">Upload a video or pick one from the list.</div>
+          </div>
+          <div class="chart-head"><h3>Worker timeline</h3><span class="note" id="timelineNote"></span></div>
+          <div id="timeline" class="chart"></div>
+        </section>
+
+        <section class="card">
+          <h2>Analysis</h2>
+          <div class="field"><label for="analyzerSel">Analyser</label>
+            <select id="analyzerSel">
+              <option value="gemini">Gemini (live, batch by batch; offline labeller if Gemini fails)</option>
+              <option value="offline">Offline FORGE labeller only (local GPU, no API; events arrive at the end)</option>
+            </select></div>
+          <div class="controls">
+            <div class="field"><label for="maxSec">Analyse first N seconds (0 = whole video)</label><input id="maxSec" type="number" min="0" step="10" value="0"></div>
+            <div class="field"><label for="everyS">One frame every (s)</label><input id="everyS" type="number" min="0.25" max="30" step="0.25"></div>
+            <div class="field"><label for="batchN">Frames per Gemini request</label><input id="batchN" type="number" min="2" max="40" step="1"></div>
+          </div>
+          <div class="field"><label for="sopInput">SOP: one step per line (optional, enables deviation checks)</label>
+            <textarea id="sopInput" rows="4" placeholder="pick bracket&#10;fasten bracket with 4 screws&#10;inspect weld&#10;place on conveyor"></textarea></div>
+          <div class="btns">
+            <button id="startBtn" class="primary" disabled>▶ Start analysis</button>
+            <button id="restartBtn" class="hidden" title="Delete stored results and analyse again from the start">↺ Restart</button>
+            <button id="cancelBtn" class="hidden">■ Cancel</button>
+          </div>
+          <div class="progress">
+            <div class="bar big"><i id="progressFill"></i></div>
+            <div class="progress-line"><b id="statusText">–</b><span id="stageText"></span></div>
+            <div id="progressStats" class="kv small"></div>
+            <div id="analysisNote" class="note"></div>
+          </div>
+          <h3>Analysis batches</h3>
+          <div id="batchLog" class="batch-log"></div>
+          <h3>Downloads (generated and stored by the backend)</h3>
+          <div id="downloads" class="downloads"></div>
+        </section>
+      </div>
+
+      <section class="card">
+        <div class="row-head">
+          <h2>3D hands · camera (head) frame</h2>
+          <div class="viewer-tools">
+            <span class="seg" id="h3dViews"><button data-view="3d" class="active">3D</button><button data-view="head">Head view</button><button data-view="top">Top</button><button data-view="side">Side</button></span>
+            <label class="check"><input id="h3dTrails" type="checkbox" checked> trails</label>
+            <button id="h3dBtn" disabled>Compute 3D hands</button>
+          </div>
+        </div>
+        <div class="h3d">
+          <div class="h3d-stage"><canvas id="h3dCanvas"></canvas><div id="h3dMsg" class="h3d-msg"></div>
+            <div class="h3d-legend"><span><i style="background:var(--left)"></i>left hand</span><span><i style="background:var(--right)"></i>right hand</span>
+              <span><i style="background:var(--accent)"></i>camera (head)</span><span>wrist axes: <b style="color:#f85149">x</b> <b style="color:#3fb950">y</b> <b style="color:#4cc2ff">z</b></span>
+              <span class="note">drag to rotate · scroll to zoom · double-click to reset</span></div>
+          </div>
+          <aside id="h3dPanel" class="h3d-panel"></aside>
+        </div>
+        <div id="h3dNote" class="note"></div>
+      </section>
+
+      <section class="card"><div id="tiles" class="tiles"></div></section>
+
+      <div class="grid2">
+        <section class="card">
+          <h2>Alerts</h2>
+          <div id="alerts" class="alerts"></div>
+        </section>
+        <section class="card">
+          <div class="row-head">
+            <h2>Live JSON events <span id="eventCount" class="count"></span></h2>
+            <div class="viewer-tools">
+              <select id="filterWorker" title="Filter by worker"><option value="">all workers</option></select>
+              <select id="filterStatus" title="Filter by verification status">
+                <option value="">all statuses</option><option>verified</option><option>corrected</option>
+                <option>low_confidence</option><option>unverified</option></select>
+              <label class="check"><input id="fullRecord" type="checkbox"> full record</label>
+              <label class="check"><input id="followNew" type="checkbox" checked> follow</label>
+            </div>
+          </div>
+          <div id="jsonViewer" class="json-viewer"></div>
+        </section>
+      </div>
+
+      <section class="card">
+        <h2>Worker-wise analysis</h2>
+        <div id="workers" class="workers"></div>
+      </section>
+
+      <div class="grid2">
+        <section class="card">
+          <h2>Worker comparison</h2>
+          <div class="compare-pick"><span class="note">Add workers from other analysed videos:</span> <span id="compareWith" class="chips"></span></div>
+          <div id="comparison"></div>
+        </section>
+        <section class="card">
+          <div class="chart-head"><h2>Task durations</h2><span class="note">dots = events, tick = median, line = range</span></div>
+          <div id="taskChart" class="chart"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+  <div id="tooltip" class="tooltip"></div>
+  <div id="toast" class="toast"></div>
+  <script type="module" src="studio.js"></script>
+</body>
+</html>

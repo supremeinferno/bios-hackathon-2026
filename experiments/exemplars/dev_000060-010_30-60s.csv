@@ -1,0 +1,10 @@
+clip,start_s,end_s,verb,object,hand
+mytronlabs-000060-010,30.0,31.5,press,hoist controller,left
+mytronlabs-000060-010,34.5,39.5,hold,granite slab,right
+mytronlabs-000060-010,40.0,43.5,press,hoist controller,right
+mytronlabs-000060-010,44.5,48.5,hold,metal bar,right
+mytronlabs-000060-010,49.0,51.5,press,hoist controller,left
+mytronlabs-000060-010,49.0,51.5,hold,granite slab,right
+mytronlabs-000060-010,52.0,53.5,push,granite slab,right
+mytronlabs-000060-010,53.5,55.5,press,hoist controller,both
+mytronlabs-000060-010,58.5,60.0,press,hoist controller,right

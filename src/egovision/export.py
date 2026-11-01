@@ -118,11 +118,16 @@ def load_result(out_dir: Path) -> dict[str, Any]:
     }
 
 
+def deliverable(actions: list[Action], drop_rejected: bool) -> list[Action]:
+    """What goes into actions.csv: everything, or everything except Stage 7 'rejected' actions."""
+    return [a for a in actions if not (drop_rejected and a.status == "rejected")]
+
+
 def write_outputs(out_dir: Path, meta: VideoMeta, hands: list[FrameHands], objects: list[FrameObjects],
                   contacts: list[ContactSegment], actions: list[Action], keyframes: list[Any],
-                  sanitized: Path | None = None) -> None:
+                  sanitized: Path | None = None, drop_rejected: bool = False) -> None:
     write_hands_jsonl(hands, out_dir / "hands.jsonl", meta.width, meta.height)
-    write_actions_csv(actions, out_dir / "actions.csv")
+    write_actions_csv(deliverable(actions, drop_rejected), out_dir / "actions.csv")
     write_contacts_csv(contacts, out_dir / "contacts.csv")
     write_actions_json(actions, out_dir / "actions.json")
     result = {

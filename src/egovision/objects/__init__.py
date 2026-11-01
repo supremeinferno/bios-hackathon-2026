@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from egovision.objects.contact import associate, contact_segments
+from egovision.objects.contact import associate, contact_segments, nearest_object
 from egovision.objects.detector import OpenVocabDetector
 
-__all__ = ["OpenVocabDetector", "associate", "contact_segments"]
+__all__ = ["OpenVocabDetector", "associate", "contact_segments", "nearest_object"]

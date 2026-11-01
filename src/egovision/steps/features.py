@@ -23,6 +23,7 @@ class SideFeat:
     speed: float = 0.0  # wrist speed in hand-sizes per second
     crop_box: list[float] | None = None  # original pixels
     emb: np.ndarray | None = None
+    near_object: str | None = None  # closest detected object when there is no contact (steps.object_fallback)
 
 
 @dataclass

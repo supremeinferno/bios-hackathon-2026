@@ -1,0 +1,4 @@
+# O3: O0 + object name falls back to the nearest detected object when a hand has no contact (portable first).
+steps:
+  backend: exemplar
+  object_fallback: nearest

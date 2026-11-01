@@ -63,7 +63,12 @@ def verify_action(act: Action, sig: Signals, contacts: list[ContactSegment], cfg
         return act.model_copy(update={"status": "unverified", "flags": ["no_signal"], "evidence": ev})
     pres = {s: float(sig.vis[s][w].mean()) for s in SIDES}
     ev["presence"] = {s: round(v, 2) for s, v in pres.items()}
+    ev = {**(act.evidence or {}), **ev}
     if max(pres.values()) < cfg.reject_presence:
+        vlm_saw = (act.evidence or {}).get("vlm_hands_visible")
+        if cfg.reject_needs_vlm_visible and vlm_saw in ("no", "partly"):
+            return act.model_copy(update={"status": "unverified", "flags": ["no_hand_visible", f"vlm_hands_{vlm_saw}"],
+                                          "evidence": ev})
         return act.model_copy(update={"status": "rejected", "flags": ["no_hand_visible"], "evidence": ev})
     act_l = hand_activity(sig, act.start_s, act.end_s)
     ev["activity"] = {s: round(v, 3) for s, v in act_l.items()}
@@ -75,7 +80,7 @@ def verify_action(act: Action, sig: Signals, contacts: list[ContactSegment], cfg
         ratio = max(left, right) / max(min(left, right), 1e-6)
         measured = "both" if ratio < cfg.both_ratio else ("left" if left > right else "right")
         ev["measured_hand"] = measured
-        if act.hand in SIDES and measured in SIDES and measured != act.hand and pres[act.hand] < cfg.min_presence:
+        if cfg.correct_hand and act.hand in SIDES and measured in SIDES and measured != act.hand                 and pres[act.hand] < cfg.min_presence:
             new_hand, corrected = measured, True
             flags.append(f"hand_corrected_from_{act.hand}")
     hands = claimed(new_hand)

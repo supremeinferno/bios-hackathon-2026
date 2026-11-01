@@ -34,3 +34,13 @@ def test_split_and_merge():
     log = [Decision(action_id="a000", op="split", at_s=2.0), Decision(action_id="a001", op="merge")]
     out = apply_review(acts(), log)
     assert [(a.id, a.start_s, a.end_s) for a in out] == [("a000", 0, 2.0), ("a000b", 2.0, 4), ("a001", 4, 9)]
+
+
+def test_trim_approval_is_bound_to_the_plan_it_approved():
+    from egovision.review import approved_plan, progress, trim_approved
+
+    log = [Decision(op="approve_trim", fields={"plan_sha": "aaa"})]
+    assert trim_approved(log, "aaa") and not trim_approved(log, "bbb")  # plan changed after approval
+    assert progress(acts(), log, "bbb")["trim_approved"] is False
+    assert approved_plan([Decision(op="approve_trim")]) == ""  # approvals stored before fingerprints never match
+    assert approved_plan([]) is None

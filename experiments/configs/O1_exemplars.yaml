@@ -1,0 +1,6 @@
+# O1: O0 + few-shot visual prototypes from DEV labels 30-60 s only (experiments/exemplars/), features from the O0
+# run. Scored on dev 0-30 s only (experiments/labels_dev_0-30s), so no evaluated segment fed the prototypes.
+steps:
+  backend: exemplar
+  exemplars_file: experiments/exemplars/dev_000060-010_30-60s.csv
+  exemplars_features_root: outputs_exp/O0_offline_base

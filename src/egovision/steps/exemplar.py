@@ -52,13 +52,17 @@ class ExemplarMatcher:
         return self._text[key]
 
     def _load_visual_prototypes(self, path: Path) -> np.ndarray | None:
-        """Few-shot: rows of clip,start_s,end_s,verb,object,hand; features from outputs/<clip>/features.npz."""
+        """Few-shot: rows of clip,start_s,end_s,verb,object,hand (the labels CSV format); features from
+        <exemplars_features_root>/<clip>/features.npz."""
         sums: dict[str, list[np.ndarray]] = {v: [] for v in self.cfg.verbs}
         with open(path, encoding="utf-8") as f:
             rows = list(csv.DictReader(f))
         for r in rows:
-            feat = Path("outputs") / r["clip"] / "features.npz"
-            if not feat.is_file() or r["verb"] not in sums:
+            feat = Path(self.cfg.exemplars_features_root) / r["clip"] / "features.npz"
+            if not feat.is_file():
+                log.warning("steps: no features for exemplar clip %s at %s", r["clip"], feat)
+                continue
+            if r["verb"] not in sums:
                 continue
             z = np.load(feat)
             t = z["t"]
@@ -106,10 +110,12 @@ class ExemplarMatcher:
             em = np.zeros((len(keyframes), idle + 1))
             vlp = np.full((len(keyframes), idle), np.nan)
             objs: list[str | None] = []
+            near: list[str | None] = []  # naming fallback only; verb scores keep using contacts
             for k, kf in enumerate(keyframes):
                 sf = kf.sides.get(side)
                 obj = sf.contact.object if sf and sf.contact and sf.contact.state != "none" else None
                 objs.append(obj)
+                near.append(sf.near_object if sf and c.object_fallback == "nearest" else None)
                 if sf is None or not sf.present:
                     em[k, :idle], em[k, idle] = -c.absent_cost, 0.0
                     continue
@@ -126,13 +132,17 @@ class ExemplarMatcher:
                 if lab == idle:
                     continue
                 run_objs = [o for o in objs[a:b + 1] if o]
-                obj = Counter(run_objs).most_common(1)[0][0] if run_objs else "unknown"
+                run_near = [o for o in near[a:b + 1] if o]
+                obj_source = "contact" if run_objs else ("nearest" if run_near else "none")
+                pool = run_objs or run_near
+                obj = Counter(pool).most_common(1)[0][0] if pool else "unknown"
                 conf = float(np.nanmean(np.exp(vlp[a:b + 1, lab]))) if not np.isnan(vlp[a:b + 1, lab]).all() else None
                 s = max(0.0, times[a] - step / 2)
                 e = min(meta.duration_s, times[b] + step / 2)
                 if e - s >= c.min_segment_s:
                     actions.append(Action(clip=meta.name, start_s=round(s, 2), end_s=round(e, 2), verb=c.verbs[lab],
                                           object=obj, hand=side, confidence=round(conf, 3) if conf else None,
-                                          source=self.name))
+                                          source=self.name,
+                                          evidence={"object_source": obj_source} if c.object_fallback != "none" else None))
         actions = carve_pick_place(actions, contacts, c.pick_place_s, c.min_segment_s)
         return merge_both(actions, c.both_iou)

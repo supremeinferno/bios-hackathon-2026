@@ -79,5 +79,67 @@ def test_review_flow_and_trim_requires_approval(tmp_path: Path, synthetic_video:
     st = c.get("/api/results/clipA/review").json()
     assert st["queue"][0]["verb"] == "place" and st["queue"][0]["review"]["by"] == "khushi"
     assert "place" in c.get("/api/results/clipA/download/actions_reviewed.csv").text
-    c.post("/api/results/clipA/review", json={"op": "approve_trim"})
-    assert c.get("/api/results/clipA/review").json()["trim_plan"]["approved"] is True
+    assert c.post("/api/results/clipA/trim", json={"mode": "cut"}).status_code == 409  # not approved yet
+    c.post("/api/results/clipA/review", json={"op": "approve_trim", "fields": {"plan_sha": "forged"}})
+    tp = c.get("/api/results/clipA/review").json()["trim_plan"]
+    assert tp["approved"] is True and tp["modes"] == ["cut", "keep_lite"]
+    assert json.loads((tmp_path / "outputs/clipA/review.json").read_text())["decisions"][-1]["fields"]["plan_sha"] == tp["sha"]
+
+
+def _long_video(tmp_path: Path) -> Path:
+    """8 s, 10 fps, 160x120."""
+    import cv2
+    import numpy as np
+
+    p = tmp_path / "long.mp4"
+    w = cv2.VideoWriter(str(p), cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (160, 120))
+    for i in range(80):
+        w.write(np.full((120, 160, 3), (i * 3) % 255, np.uint8))
+    w.release()
+    return p
+
+
+def test_trim_flow_approval_outdated_by_edit_then_cut_and_serve(tmp_path: Path, monkeypatch):
+    import time
+
+    monkeypatch.chdir(tmp_path)  # the trim stage writes to data/trimmed relative to the working directory
+    video = _long_video(tmp_path)
+    raw, out = tmp_path / "raw", tmp_path / "outputs"
+    raw.mkdir()
+    shutil.copy(video, raw / "clipB.mp4")
+    meta = probe(raw / "clipB.mp4").model_copy(update={"name": "clipB"})
+    san = tmp_path / "san" / "clipB.mp4"
+    san.parent.mkdir()
+    shutil.copy(video, san)
+    d = out / "clipB"
+    d.mkdir(parents=True)
+    acts = [Action(id="a000", clip="clipB", start_s=0.0, end_s=1.0, verb="pick", object="cloth", hand="left"),
+            Action(id="a001", clip="clipB", start_s=6.0, end_s=7.0, verb="place", object="cloth", hand="left")]
+    write_outputs(d, meta, [FrameHands(frame=i, t=i / 10) for i in range(80)], [FrameObjects(frame=0, t=0.0)], [], acts, [],
+                  san)
+    (d / "run.json").write_text(json.dumps({"processed_until_s": 8.0, "stats": {}, "timings": {}}))
+    c = TestClient(create_app(raw=raw, uploads=tmp_path / "up", outputs=out, labels=tmp_path / "labels"))
+
+    tp = c.get("/api/results/clipB/review").json()["trim_plan"]
+    assert tp["cuts"] == 1 and tp["cut_duration_s"] == 4.0  # keep 0-1.5 and 5.5-8 s (pad 0.5 s; 0.5 s tail kept)
+    c.post("/api/results/clipB/review", json={"op": "approve_trim"})
+    c.post("/api/results/clipB/review", json={"action_id": "a001", "op": "edit", "fields": {"start_s": 4.0}})
+    tp = c.get("/api/results/clipB/review").json()["trim_plan"]
+    assert tp["approved"] is False and tp["approval_outdated"] is True  # the edit changed the plan
+    assert c.post("/api/results/clipB/trim", json={"mode": "cut"}).status_code == 409
+    c.post("/api/results/clipB/review", json={"op": "approve_trim"})
+    job = c.post("/api/results/clipB/trim", json={"mode": "cut"}).json()["id"]
+    for _ in range(200):
+        j = c.get(f"/api/jobs/{job}").json()
+        if j["status"] in ("done", "failed"):
+            break
+        time.sleep(0.1)
+    assert j["status"] == "done" and j["kind"] == "trim", j["error"]
+    runs = c.get("/api/results/clipB/review").json()["trim_plan"]["runs"]
+    assert runs["cut"]["output_duration_s"] == 6.0 and runs["cut"]["current"] is True  # keep 0-1.5 and 3.5-8 s
+    res = c.get("/api/results/clipB").json()
+    assert res["media"]["trimmed"] == {"cut": "/media/clipB/trimmed/cut.mp4"} and "actions_trimmed.csv" in res["downloads"]
+    v = c.get("/media/clipB/trimmed/cut.mp4", headers={"Range": "bytes=0-99"})
+    assert v.status_code == 206 and len(v.content) == 100
+    assert c.get("/media/clipB/trimmed/keep_lite.mp4").status_code == 404
+    assert c.get("/media/clipB/trimmed/..%2F..%2Fsecret.mp4").status_code == 404

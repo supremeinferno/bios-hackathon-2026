@@ -51,7 +51,7 @@ The full 15-stage pipeline (FORGE) is in [docs/PIPELINE.md](docs/PIPELINE.md). S
 | 7 Verification | Each action checked against hand presence, motion and contacts → verified / corrected / unverified / rejected | own code |
 | 8 Order + boundaries | Boundaries snapped to hand-motion valleys; per-source step template; missing / out-of-order / repeated flags | own code (DP / LCS) |
 | 9 Review | Queue sorted by uncertainty; approve / edit / split / merge / reject; separate `review.json` layer | FastAPI + JS |
-| 10 Trim | Keep-lite trim + H.265 of the sanitized copy after approval; original timestamps kept | PyAV, libx265 |
+| 10 Trim | After the reviewer approves the current plan: cut idle stretches (shorter video + time map) or keep them at 1 fps (same length); H.264 of the sanitized copy | PyAV, libx264 |
 | 11 Analytics | Time per verb, idle time, two-handed share, work zones, placements, cycles | own code |
 | 12 Dashboard | Sanitized video with live hand/object overlay, clickable two-lane timeline, review, downloads | FastAPI, plain JS |
 | 13 Evaluation | Segment F1@10/25/50, edit score, frame accuracy, boundary error; hand-judging sheets | own code |
@@ -89,13 +89,72 @@ egovision run --video data/raw/<clip>.mp4 --set steps.backend=gemini   # + Gemin
 egovision batch data/raw --skip-done                         # every clip; one failure does not stop the batch
 egovision sop                                                # step templates + missing/out-of-order flags
 egovision eval                                               # score against labels/ (our own labels)
-egovision trim --clip <clip>                                 # after the trim plan is approved in review
+egovision trim --clip <clip> --mode cut                      # after the trim plan is approved in review (or keep_lite)
 egovision ui                                                 # dashboard at http://127.0.0.1:8000
+egovision hands3d --video data/raw/<clip>.mp4                # approximate 3D hands in camera coords -> outputs/<clip>/hands3d.jsonl
 python scripts/make_demo.py --clip <clip>:20:30 --out artifacts/demo.mp4   # presentation video
 ```
 
 Every threshold lives in one typed config (`src/egovision/config.py`); override with `--set section.key=value`
 or `--config my.yaml`. Tests: `pytest` (includes a 10-second smoke test on a real clip).
+
+
+## Studio: upload in the browser, live Gemini analysis, worker analytics
+
+```bash
+egovision studio                                             # http://127.0.0.1:8010 (GEMINI_API_KEY from .env)
+```
+
+The browser only uploads, plays and downloads; the backend does all processing and is the source of truth:
+
+```text
+browser upload ─► POST /api/videos/upload ─► data/videos/<id>/<id>.* (+ H.264 preview for HEVC)
+Start ─► POST /api/videos/<id>/analyze ─► OpenCV samples 1 frame/s ─► batches of 10 frames ─► Gemini (JSON schema)
+      ─► Pydantic validation (bad items rejected and logged) ─► SQLite data/studio.sqlite3
+      ─► worker analytics in Python ─► CSV + JSON in outputs/videos/<id>/reports/ (path + sha256 in the DB)
+      ─► WebSocket /api/videos/<id>/live pushes events, analytics, progress and report pointers to the page
+```
+
+**Analysers.** *Gemini* (default): `gemini-3.5-flash` with FORGE's fallback models, batch by batch, so events stream in
+live. If there is no `GEMINI_API_KEY`, the key is rejected, the quota is used up on every model, or 3 batches fail in a
+row, the rest of the video goes to FORGE's *offline labeller* (local GPU, no API; it reuses matching FORGE results in
+`outputs/<clip>/`). The offline labeller follows only the camera wearer's hands (worker W1), delivers its events at the
+end of the run, and measured far below Gemini ([docs/RESULTS.md](docs/RESULTS.md)); the dashboard says so next to its
+alerts, and every event records its `source`. **Import** turns existing FORGE results into a finished analysis
+without any processing (`POST /api/forge/import`).
+
+| Endpoint | What |
+|---|---|
+| `POST /api/videos/upload` · `POST /api/videos/{id}/analyze` · `POST /api/videos/{id}/cancel` · `DELETE /api/videos/{id}` | upload, start / resume / restart, cancel, delete |
+| `GET /api/videos` · `/{id}` · `/{id}/status` · `/{id}/events` · `/{id}/workers` · `/{id}/analytics` · `/{id}/anomalies` · `/{id}/batches` · `/{id}/reports` | stored state |
+| `GET /api/videos/{id}/export/csv[?table=workers]` · `GET /api/videos/{id}/export/json` | reports generated from the DB and stored under `outputs/`; `partial` (file name `_PARTIAL`, every row marked) until the analysis completes, then `final` |
+| `GET /api/forge/clips` · `POST /api/forge/import` | FORGE results that can be imported; import one |
+| `GET /api/compare?video_ids=a,b` | workers of several videos side by side |
+| `WS /api/videos/{id}/live` | snapshot on connect, then live updates |
+
+- **Events:** `event_id, worker_id, action (fixed 21-word list), object, tool, start_ts, end_ts, duration_s, confidence,
+  verification_status, completion_status, source`. A sampled frame at *t* covers [*t*, *t* + 1 s); tasks running across
+  batch boundaries are continued, not duplicated. `verification_status`: `low_confidence` (< 0.6) > `unverified` (seen
+  in one frame) > `corrected` (backend changed something, e.g. snapped a timestamp) > `verified`.
+- **Analytics** (`egovision/studio/analytics.py`): per worker count / mean / median / total / waiting share and task
+  breakdown; unusually long tasks (>= 2x the median of comparable events and >= 5 s above it, baseline reported);
+  incomplete tasks; bottlenecks (time share, repeated long, waiting, variability, worker gaps); SOP deviations per
+  work cycle (skipped, out-of-order, repeated) when an SOP is given (offline events are matched to SOP steps by keywords).
+- **Resilience:** every batch is committed before the next request, so a page refresh loses nothing; a cancelled or
+  interrupted analysis resumes from the next batch.
+- **3D hands** (`egovision/hands3d.py`, also `egovision hands3d --video <clip>`): the same MediaPipe model, keeping the
+  metric hand landmarks FORGE discards, posed on the fisheye viewing rays (PnP) -> 21 keypoints per hand in metres in
+  the camera/head frame (X right, Y forward, Z up), wrist axes, grip aperture, distance, speed; a rotatable 3D view
+  synced with the video, a coordinates panel and a JSONL download. **Approximate**: no intrinsics exist, so the lens
+  is an assumed equidistant fisheye with 150 deg FOV (`STUDIO_HANDS3D_HFOV_DEG`); directions are reliable, distances
+  scale with that guess; the camera moves with the head (no IMU/SLAM), and the body skeleton is not observable.
+- **Privacy:** frames go inline in each request (nothing in Gemini file storage). If a FORGE sanitized copy of the same
+  clip exists in `data/sanitized/`, frames come from it; otherwise faces are pixelated per frame (OpenCV Haar cascade,
+  best effort, no company-name blurring) before frames leave the machine. Unlike the FORGE dashboard, the Studio plays
+  the uploaded file (or its preview) back to the local browser.
+- **Settings:** `STUDIO_*` env vars, e.g. `STUDIO_ANALYZER=offline`, `STUDIO_GEMINI_MODEL`, `STUDIO_SAMPLE_EVERY_S`,
+  `STUDIO_BATCH_FRAMES` (`egovision/studio/settings.py`). One job at a time; avoid running a FORGE dashboard job at the
+  same time (one 4 GB GPU).
 
 ## Results
 
@@ -126,7 +185,7 @@ Decisions with the measurements behind them: [docs/DECISIONS.md](docs/DECISIONS.
 | OWLv2 `google/owlv2-base-patch16-ensemble` | Apache-2.0 |
 | SigLIP `google/siglip-base-patch16-224` | Apache-2.0 |
 | Grounding DINO `IDEA-Research/grounding-dino-tiny` (benchmarked, optional) | Apache-2.0 |
-| Gemini API (`gemini-3.5-flash`, fallbacks `gemini-flash-lite-latest`, `gemini-3.8-flash`) | Google API terms |
+| Gemini API (`gemini-3.5-flash`, fallbacks `gemini-flash-lite-latest`, `gemini-3.8-flash`; FORGE step + Studio) | Google API terms |
 | PyTorch, torchvision | BSD-3-Clause |
 | Hugging Face transformers, accelerate | Apache-2.0 |
 | OpenCV | Apache-2.0 |
