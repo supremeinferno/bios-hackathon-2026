@@ -60,8 +60,12 @@
           <div id="videoMeta" class="meta"></div>
           <div class="stage">
             <video id="player" controls playsinline preload="metadata"></video>
+            <canvas id="handsOverlay" class="hands-overlay"></canvas>
             <div id="playerMsg" class="player-msg">Upload a video or pick one from the list.</div>
           </div>
+          <div class="hands-bar"><label class="check"><input id="handsToggle" type="checkbox" checked> hand tracking</label>
+            <span class="h3d-legend"><span><i style="background:var(--left)"></i>left</span><span><i style="background:var(--right)"></i>right</span></span>
+            <span id="handsNote" class="note"></span></div>
           <div class="chart-head"><h3>Worker timeline</h3><span class="note" id="timelineNote"></span></div>
           <div id="timeline" class="chart"></div>
         </section>

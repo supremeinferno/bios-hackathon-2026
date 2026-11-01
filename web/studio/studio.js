@@ -28,7 +28,7 @@ const KEY_FIELDS = ["event_id", "worker_id", "action", "object", "tool", "start_
 
 const state = { settings: null, videos: [], vid: null, video: null, events: new Map(), workers: [], analytics: null,
   reports: [], batches: new Map(), ws: null, wsTimer: null, wsRetry: 0, file: null, localUrl: null, compare: null,
-  compareIds: new Set(), renderQueued: false };
+  compareIds: new Set(), renderQueued: false, hands2d: null };
 
 const viewer3d = new Hands3DViewer({ canvas: $("#h3dCanvas"), panel: $("#h3dPanel"), message: $("#h3dMsg"), player: $("#player"),
   colors: { left: css.getPropertyValue("--left").trim(), right: css.getPropertyValue("--right").trim(),
@@ -222,6 +222,7 @@ async function select(vid, { keepLocal = false } = {}) {
   renderMeta();
   setPlayer(keepLocal);
   viewer3d.clear("");
+  loadHands2d();
   renderH3dStatus();
   if (v.hands3d_status === "ready") loadH3d();
   renderStatus();
@@ -303,6 +304,7 @@ function handle(msg) {
       renderStatus(); renderDownloads(); renderBatches(); renderViewer(); renderAll();
       break;
     case "status":
+      if (msg.status.status === "completed" && state.video.status !== "completed" && !state.hands2d) loadHands2d();
       Object.assign(state.video, msg.status);
       renderStatus();
       renderH3dStatus();
@@ -311,7 +313,7 @@ function handle(msg) {
     case "hands3d":
       state.video.hands3d_status = msg.status;
       renderH3dStatus();
-      if (msg.status === "ready") { loadH3d(); toast("3D hands ready."); }
+      if (msg.status === "ready") { loadH3d(); if (state.hands2d?.source !== "forge") loadHands2d(); toast("3D hands ready."); }
       if (msg.status === "failed") toast(`3D hands failed: ${state.video.hands3d_error || ""}`, true);
       break;
     case "event":
@@ -470,6 +472,86 @@ $("#h3dViews").addEventListener("click", (e) => {
   viewer3d.setView(b.dataset.view);
 });
 $("#h3dTrails").addEventListener("change", (e) => { viewer3d.trails = e.target.checked; viewer3d.render(); });
+
+// ---------------------------------------------------------------- 2D hand tracking on the video
+// Tracks come from the backend (FORGE hands.jsonl, or the 3D job's 2D keypoints); the browser only draws them.
+const HAND_EDGES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],
+  [14,15],[15,16],[13,17],[0,17],[17,18],[18,19],[19,20]];
+const HAND_COLORS = [css.getPropertyValue("--left").trim(), css.getPropertyValue("--right").trim()];
+const FINGERTIPS = [4, 8, 12, 16, 20];
+async function loadHands2d() {
+  const vid = state.vid;
+  state.hands2d = null;
+  drawHands();
+  $("#handsNote").textContent = "";
+  let d;
+  try { d = await api(`/api/videos/${vid}/hands2d`); } catch (e) {
+    if (state.vid === vid) $("#handsNote").textContent = "No hand tracks for this video yet: run the offline labeller or press “Compute 3D hands”.";
+    return;
+  }
+  if (state.vid !== vid) return;
+  const gaps = d.t.slice(1).map((t, i) => t - d.t[i]).sort((a, b) => a - b);
+  d.maxGap = 1.5 * (gaps[gaps.length >> 1] || 0.04) + 0.02;  // a frame further away than this has no tracks
+  state.hands2d = d;
+  const withHands = d.frames.filter((f) => f.length).length;
+  $("#handsNote").textContent = `${d.source === "forge" ? "FORGE hand tracker (MediaPipe + tracking)" : "3D hands job (MediaPipe, every 2nd frame)"}`
+    + ` · hands in ${pct(withHands / Math.max(d.frames.length, 1))} of ${d.frames.length} frames`;
+  drawHands();
+}
+function handsAt(t) {
+  const d = state.hands2d;
+  let lo = 0, hi = d.t.length - 1;
+  if (hi < 0) return null;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (d.t[m] < t) lo = m + 1; else hi = m; }
+  if (lo > 0 && t - d.t[lo - 1] < d.t[lo] - t) lo -= 1;
+  return Math.abs(d.t[lo] - t) <= d.maxGap ? d.frames[lo] : null;
+}
+function drawHands() {
+  const c = $("#handsOverlay"), p = $("#player");
+  const w = c.clientWidth, h = c.clientHeight, dpr = window.devicePixelRatio || 1;
+  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
+  const g = c.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const d = state.hands2d;
+  if (!d || !$("#handsToggle").checked || !p.videoWidth) return;
+  const hands = handsAt(p.currentTime);
+  if (!hands) return;
+  // The video is letterboxed inside the stage (object-fit: contain); tracks are in the original video's pixels.
+  const s = Math.min(w / p.videoWidth, h / p.videoHeight);
+  const ox = (w - s * p.videoWidth) / 2, oy = (h - s * p.videoHeight) / 2;
+  const kx = s * p.videoWidth / (d.width || p.videoWidth), ky = s * p.videoHeight / (d.height || p.videoHeight);
+  const X = (x) => ox + x * kx, Y = (y) => oy + y * ky;
+  for (const hd of hands) {
+    const [id, side, score, interp, x1, y1, x2, y2] = hd, kp = hd.slice(8), col = HAND_COLORS[side];
+    g.globalAlpha = interp ? 0.55 : 1;
+    g.strokeStyle = col; g.lineWidth = 2; g.setLineDash(interp ? [6, 4] : []);
+    g.strokeRect(X(x1), Y(y1), X(x2) - X(x1), Y(y2) - Y(y1));
+    g.setLineDash([]); g.lineWidth = 2.5; g.beginPath();
+    for (const [a, b] of HAND_EDGES) { g.moveTo(X(kp[2 * a]), Y(kp[2 * a + 1])); g.lineTo(X(kp[2 * b]), Y(kp[2 * b + 1])); }
+    g.stroke();
+    for (let i = 0; i < 21; i++) {
+      g.fillStyle = FINGERTIPS.includes(i) ? col : "#fff";
+      g.beginPath(); g.arc(X(kp[2 * i]), Y(kp[2 * i + 1]), FINGERTIPS.includes(i) ? 4 : 2.5, 0, 2 * Math.PI); g.fill();
+    }
+    const tag = `${side ? "R" : "L"}${id >= 0 ? ` #${id}` : ""} ${score}%${interp ? " (interp.)" : ""}`;
+    g.font = "600 12px system-ui, sans-serif";
+    const tw = g.measureText(tag).width, ty = Math.max(Y(y1) - 18, 0);
+    g.fillStyle = col; g.fillRect(X(x1), ty, tw + 8, 17);
+    g.fillStyle = "#000"; g.fillText(tag, X(x1) + 4, ty + 13);
+  }
+  g.globalAlpha = 1;
+}
+(function handsLoop() {
+  const p = $("#player");
+  if ("requestVideoFrameCallback" in HTMLVideoElement.prototype) {
+    const tick = () => { drawHands(); p.requestVideoFrameCallback(tick); };
+    p.requestVideoFrameCallback(tick);
+  }
+  for (const ev of ["seeked", "loadeddata", "pause", "timeupdate"]) p.addEventListener(ev, drawHands);
+  $("#handsToggle").addEventListener("change", drawHands);
+  new ResizeObserver(drawHands).observe($("#handsOverlay"));
+})();
 
 // ---------------------------------------------------------------- downloads
 function renderDownloads() {

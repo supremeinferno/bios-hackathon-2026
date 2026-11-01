@@ -177,6 +177,29 @@ def create_app(settings: StudioSettings | None = None, analyzer_factory: Callabl
         summary = json.loads((d / "hands3d_summary.json").read_text(encoding="utf-8"))
         return JSONResponse({"summary": summary, "frames": frames}, headers={"Cache-Control": "no-store"})
 
+    @app.get("/api/videos/{video_id}/hands2d")
+    def hands2d_data(video_id: str) -> JSONResponse:
+        """2D hand tracks for the overlay on the video: {source, width, height, t: [...], frames: [[hand, ...]]} with
+        hand = [id (-1 = none), side (0 left, 1 right), score %, interpolated, x1, y1, x2, y2, keypoints (42)] in pixels
+        of a width x height frame (the video the tracks were made on)."""
+        video_or_404(video_id)
+        src = studio.hands2d_source(video_id)
+        if src is None:
+            raise HTTPException(404, "no 2D hand tracks yet: analyse with the offline labeller or compute 3D hands")
+        path, kind, width, height = src
+        times, frames = [], []
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                fr = json.loads(line)
+                times.append(round(fr["t"], 3))
+                frames.append([[h["id"] if h.get("id") is not None else -1, 0 if h["side"] == "left" else 1,
+                                int(round(h["score"] * 100)), int(bool(h.get("interp"))),
+                                *[int(round(x)) for x in h["bbox"]],
+                                *[int(round(x)) for p in h["kp2d"] for x in p]]
+                               for h in fr["hands"] if "kp2d" in h])
+        return JSONResponse({"source": kind, "width": width, "height": height, "t": times, "frames": frames},
+                            headers={"Cache-Control": "no-store"})
+
     @app.get("/api/videos/{video_id}/export/hands3d")
     def hands3d_download(video_id: str) -> FileResponse:
         v = video_or_404(video_id)

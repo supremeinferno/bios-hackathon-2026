@@ -308,6 +308,16 @@ def test_import_forge_results(tmp_path: Path, long_video: Path):
         evs = c.get(f"/api/videos/{v['video_id']}/events").json()
         assert [e["action"] for e in evs] == ["pick", "fasten", "inspect"]  # the rejected wipe is left out
         assert evs[0]["source"].startswith("import:forge")
+        # 2D hand overlay reads FORGE's hands.jsonl of the same clip
+        kp = [[100 + j, 200 + j] for j in range(21)]
+        (forge / "clipA" / "hands.jsonl").write_text("".join(json.dumps(x) + "\n" for x in [
+            {"frame": 0, "t": 0.0, "hands": []},
+            {"frame": 1, "t": 0.04, "hands": [{"id": 3, "side": "right", "score": 0.87, "bbox": [100, 200, 120.4, 220],
+                                               "kp2d": kp, "interp": True}]}]))
+        d = c.get(f"/api/videos/{v['video_id']}/hands2d").json()
+        assert d["source"] == "forge" and d["t"] == [0.0, 0.04] and (d["width"], d["height"]) == (v["width"], v["height"])
+        assert d["frames"][0] == [] and d["frames"][1][0][:8] == [3, 1, 87, 1, 100, 200, 120, 220]
+        assert d["frames"][1][0][8:12] == [100, 200, 101, 201] and len(d["frames"][1][0]) == 8 + 42
         r = c.get(f"/api/videos/{v['video_id']}/export/csv")
         assert r.headers["x-report-status"] == "final" and len(list(csv.DictReader(io.StringIO(r.text)))) == 3
         assert c.delete(f"/api/videos/{v['video_id']}").status_code == 200
@@ -439,7 +449,9 @@ def test_hands3d_job_data_and_download(tmp_path: Path, long_video: Path, monkeyp
         assert cfg.hands3d.hfov_deg == 140.0  # the Studio setting reaches the 3D fit
         progress(0.5)
         kp = [[0.1 + 0.01 * j, 0.4, -0.3] for j in range(21)]
-        frames = [{"frame": 2 * i, "t": i / 15, "hands": [hands3d.hand_record("left", 0.9, np.array(kp), 0.4)] if i else []}
+        frames = [{"frame": 2 * i, "t": i / 15, "hands": [hands3d.hand_record("left", 0.9, np.array(kp), 0.4)
+                                                          | {"kp2d": [[10.0 + j, 20.0] for j in range(21)],
+                                                             "bbox": [10.0, 20.0, 30.0, 20.0]}] if i else []}
                   for i in range(3)]
         hands3d.smooth_and_speed(frames, cfg.hands3d)
         return frames, {"frames": 3, "rate_hz": 15.0, "coords": hands3d.COORDS}
@@ -449,6 +461,7 @@ def test_hands3d_job_data_and_download(tmp_path: Path, long_video: Path, monkeyp
     with TestClient(create_app(s, analyzer_factory=lambda _: FakeAnalyzer())) as c:
         vid = _upload(c, long_video)["video_id"]
         assert c.get(f"/api/videos/{vid}/hands3d").status_code == 404
+        assert c.get(f"/api/videos/{vid}/hands2d").status_code == 404
         assert c.post(f"/api/videos/{vid}/hands3d").json()["hands3d_status"] == "queued"
         t0 = time.time()
         while c.get(f"/api/videos/{vid}/status").json()["hands3d_status"] != "ready" and time.time() - t0 < 10:
@@ -460,3 +473,6 @@ def test_hands3d_job_data_and_download(tmp_path: Path, long_video: Path, monkeyp
         r = c.get(f"/api/videos/{vid}/export/hands3d")
         assert r.status_code == 200 and "hands3d.jsonl" in r.headers["content-disposition"]
         assert json.loads(r.text.splitlines()[1])["hands"][0]["side"] == "left"
+        d2 = c.get(f"/api/videos/{vid}/hands2d").json()  # the 3D job's 2D keypoints feed the overlay
+        assert d2["source"] == "hands3d" and [len(f) for f in d2["frames"]] == [0, 1, 1]
+        assert d2["frames"][1][0][:8] == [-1, 0, 90, 0, 10, 20, 30, 20]

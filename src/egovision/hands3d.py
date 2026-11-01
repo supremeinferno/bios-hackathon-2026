@@ -188,6 +188,8 @@ def compute(video: str | Path, cfg: Config, progress: Callable[[float], None] | 
                     counts["rejected_distance"] += 1
                     continue
                 rec = hand_record(side, float(handed[0].score), kp, fit[1])
+                rec["kp2d"] = np.round(kp2d, 1).tolist()  # pixels, for the Studio's 2D overlay on the video
+                rec["bbox"] = [round(float(x), 1) for x in (*kp2d.min(axis=0), *kp2d.max(axis=0))]
                 other = "right" if side == "left" else "left"
                 if side in best and other not in best:
                     # Both hands got the same label: the wearer's left hand is the one further left (FORGE D4).
