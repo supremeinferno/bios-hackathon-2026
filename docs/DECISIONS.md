@@ -151,3 +151,28 @@ It stays OFF by default because (a) it slows the hand stage 1.4-7x on clips wher
 hands, (b) ~8% of its additions are wrong (feet, coworker hands), and (c) switching the default changes
 every output and needs a re-run of all clips. Enable per run with
 `--set hands.recover=true --set hands.recover_detector=rtdetr` (e.g. for the demo clips).
+
+## D17 — Cycle consistency score, labour cost and automation candidate indicator (2026-11-01)
+
+New `egovision sop-cycles` (egovision/sop_cycles.py, config `sop_cycles`); `egovision sop` and the default pipeline
+are unchanged. Describes tasks and steps, never individual people; the indicator is not a replacement decision.
+
+- **Cycles.** analytics.py:65-73 uses the most frequent step per clip as the cycle marker; on our data that is a
+  `hold:*` step (a background state) for 3 of 4 sources, chosen per clip, and it counts unverified actions. So:
+  per task group, the anchor is a non-background step (not hold/other/wait/walk) that repeats in >= 2 clips and
+  maximises intervals x (1 - min(CV of its period, 1)). A cycle runs from one anchor start to the next, so the
+  partial segments at the clip edges are never counted. Fewer than 3 complete cycles: "insufficient data".
+- **Task groups.** One source can hold several tasks (MTL-SKL00089: battery packs vs aluminium profiles), so
+  clips are grouped by the overlap of their verified step sets (Jaccard >= 0.2), with a config override.
+- **Score.** `100 * (w_order * (1 - mean order distance) + w_timing * (1 - min(CV of cycle time / 0.5, 1)))
+  / (w_order + w_timing)`, w_order = w_timing = 0.5. Order distance = Levenshtein distance between a cycle's
+  step sequence and the task template, divided by the longer length. Equal weights because neither part is
+  measured as more important; a cycle-time CV of 0.5 or more already means no timing consistency.
+- **Indicator.** `candidate`: step in >= 80% of cycles, duration CV <= 25%, task order distance <= 0.3 and a verb
+  for repeatable gross motion (pick, place, push, carry). `keep manual`: judgement or fine-manipulation verbs
+  (adjust, inspect, write, attach, fasten) or CV > 50%. Otherwise `needs review`.
+- **Wage.** Team-declared (`sop_cycles.wage.currency`, `rate_per_hour`), never inferred; without it every cost
+  is null and only labour hours are reported. No wage is declared in this repository.
+- **Measured on outputs/** (RESULTS section 6): 14, 15, 3 and 7 complete cycles in four task groups, stone plant
+  none; scores 18-33, mainly from label noise and short clips, so no step is a `candidate`.
+

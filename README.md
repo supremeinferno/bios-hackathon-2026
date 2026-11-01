@@ -43,13 +43,14 @@ The full 15-stage pipeline (FORGE) is in [docs/PIPELINE.md](docs/PIPELINE.md). S
 | 0 Ingest + QC | Decode every 2nd frame at 960 px, frame cache, blur/brightness/lens-covered per frame | PyAV, OpenCV |
 | 1 Privacy | Pixelate faces (head of every person) and company names (signs, logos); wearer's hands kept sharp | OWLv2 prompts, OpenCV |
 | 2 Worker profile | Team-declared expected hands per source (`config/worker_profiles.yaml`) | YAML + Pydantic |
-| 3 Hand tracking | 21 keypoints, left/right, stable IDs with re-entry, side vote, One-Euro smoothing, CLAHE retry, coworker-hand filter | MediaPipe Hand Landmarker, SciPy |
+| 3 Hand tracking | 21 keypoints, left/right, stable IDs with re-entry, side vote, One-Euro smoothing. Optional, off by default after measurement: missed-hand recovery (CLAHE retry, or NVIDIA RT-DETR boxes + MediaPipe on crops, D16) and a coworker-hand filter (D12) | MediaPipe Hand Landmarker, SciPy, RT-DETR (optional) |
 | 4 Camera coordinates | Wrist in camera-origin coords, 3×3 zones, speed at 10 Hz → `signals.csv` | NumPy |
 | Contacts | ≥2 fingertips inside a padded object box → holds / touches | OWLv2 |
 | 5 Step labels | Offline: SigLIP image–text match + held-object cue + hand idle model + Viterbi. Optional Gemini on 30 s windows + pass 2 | SigLIP, Gemini API |
 | 6 Validation | Schema, fixed 17-verb list, times clamped | Pydantic |
 | 7 Verification | Each action checked against hand presence, motion and contacts → verified / corrected / unverified / rejected | own code |
 | 8 Order + boundaries | Boundaries snapped to hand-motion valleys; per-source step template; missing / out-of-order / repeated flags | own code (DP / LCS) |
+| 8b Cycle consistency | Per task: complete cycles between anchor steps, order distance, timing CV, 0-100 score, labour cost at a team-declared wage, automation candidate indicator per step (tasks, not people) | own code (Levenshtein, LCS) |
 | 9 Review | Queue sorted by uncertainty; approve / edit / split / merge / reject; separate `review.json` layer | FastAPI + JS |
 | 10 Trim | After the reviewer approves the current plan: cut idle stretches (shorter video + time map) or keep them at 1 fps (same length); H.264 of the sanitized copy | PyAV, libx264 |
 | 11 Analytics | Time per verb, idle time, two-handed share, work zones, placements, cycles | own code |
@@ -79,6 +80,8 @@ python -m venv .venv
 ```
 
 OWLv2 and SigLIP weights download from Hugging Face on first run. Put clips in `data/raw/` (git-ignored).
+Optional RT-DETR hand recovery: `pip install -e .[rtdetr]` and
+`python scripts/download_weights.py rtdetr_hand_detector_v1.onnx` (80 MB, sha256-checked).
 For the optional Gemini backend, copy `.env.example` to `.env` and set `GEMINI_API_KEY`.
 
 ## How to run
@@ -86,8 +89,10 @@ For the optional Gemini backend, copy `.env.example` to `.env` and set `GEMINI_A
 ```bash
 egovision run --video data/raw/<clip>.mp4                    # one clip (add --max-seconds 30 for a quick run)
 egovision run --video data/raw/<clip>.mp4 --set steps.backend=gemini   # + Gemini (sanitized copy only)
+egovision run --video data/raw/<clip>.mp4 --set hands.recover=true --set hands.recover_detector=rtdetr   # + RT-DETR hand recovery
 egovision batch data/raw --skip-done                         # every clip; one failure does not stop the batch
 egovision sop                                                # step templates + missing/out-of-order flags
+egovision sop-cycles                                         # cycle consistency, labour cost, automation candidate indicator per task
 egovision eval                                               # score against labels/ (our own labels)
 egovision trim --clip <clip> --mode cut                      # after the trim plan is approved in review (or keep_lite)
 egovision ui                                                 # dashboard at http://127.0.0.1:8000
@@ -159,13 +164,45 @@ without any processing (`POST /api/forge/import`).
 ## Results
 
 See [docs/RESULTS.md](docs/RESULTS.md) for every number, how it was measured and its caveats.
-**Labels are our own drafts, not yet checked by a person** ([labels/README.md](labels/README.md)).
+**Labels are our own drafts, not yet checked by a person** ([labels/README.md](labels/README.md)), so step scores
+measure agreement with those drafts, not true accuracy. Hand-tracking accuracy needs human-judged frames, which
+do not exist yet.
+
+**Step timeline, held-out clips** (final pipeline vs our draft labels):
+
+| Clip | Verb acc.* | Hand acc.* | Frame acc. | F1@10 | F1@25 | F1@50 |
+|---|---|---|---|---|---|---|
+| `mytronlabs-000060-016` (180 s) | 72.2% | 55.6% | 43.5% | 45.9 | 45.9 | 42.6 |
+| `MTL-SKL00089-007` (60 s) | 14.3% | 78.6% | 3.9% | 9.0 | 9.0 | 9.0 |
+
+\* on labelled actions matched in time. On the bench clip the timing agrees but the words differ ("battery pack /
+fasten" vs the draft "circuit board / attach"); the draft may be wrong.
+
+**Full batch: all 40 sample clips** (`egovision batch data/raw --set steps.backend=gemini`, 40/40 succeeded,
+6.5 h of processing on the laptop; label-free numbers, not accuracy):
+
+| Source | Clips | Frames with ≥1 hand, median (range) | Both hands, median | Actions per clip, median |
+|---|---|---|---|---|
+| MTL-SGF00106 (woodwork) | 10 | 49.7% (12.7–63.3) | 13.6% | 46 |
+| MTL-SKL00089 (LED bench) | 10 | 92.2% (88.0–97.0) | 56.5% | 61 |
+| mytronlabs-000003 (grinding) | 10 | 89.2% (55.4–94.4) | 37.0% | 91 |
+| mytronlabs-000060 (stone plant) | 10 | 25.6% (9.1–35.6) | 2.0% | 36 |
+
+- Step labeller per clip: Gemini on 37 clips, the offline labeller on 3 (one because Gemini returned malformed JSON,
+  two run with the offline backend). The free-tier quota for `gemini-3.5-flash` ran out mid-batch, so of the 180
+  windows whose model is recorded, 169 were labelled by `gemini-flash-lite-latest` and 11 by `gemini-3.5-flash`.
+  The scores above were measured with `gemini-3.5-flash`; flash-lite has not been scored separately.
+- Verification over all clips: 1,102 verified, 97 corrected, 904 unverified, 191 rejected actions. Most flags come
+  from hands the tracker did not see, not from wrong actions.
+- Speed (median per 3-minute clip): decode 133 frames/s, hand model 29 frames/s, keyframe detector 5 keyframes/s,
+  9.5 min end to end (0.32× real time, mostly waiting for Gemini and writing the sanitized copy).
 
 ## Known limitations
 
 - **No official labels.** Scores come from our own draft labels on 2 held-out clips.
 - **Gemini availability.** Whole 3-minute clips returned 503 "high demand" on every model; 30-second
-  windows work. If Gemini still fails, the run keeps the offline timeline.
+  windows work. If Gemini still fails, the run keeps the offline timeline. Free-tier quotas run out on a full
+  batch; most batch clips were labelled by the fallback model `gemini-flash-lite-latest`.
 - **Privacy is a safety layer, not anonymisation.** Faces of people far away, partial sign text at frame
   edges, and the wearer's own knees when squatting can be missed or over-blurred. The footage stays
   confidential under the data rules either way.
@@ -185,9 +222,11 @@ Decisions with the measurements behind them: [docs/DECISIONS.md](docs/DECISIONS.
 | OWLv2 `google/owlv2-base-patch16-ensemble` | Apache-2.0 |
 | SigLIP `google/siglip-base-patch16-224` | Apache-2.0 |
 | Grounding DINO `IDEA-Research/grounding-dino-tiny` (benchmarked, optional) | Apache-2.0 |
+| NVIDIA RT-DETR Hand Detector v1 `nvidia/RT-DETR-Hand-Detector-v1` (optional hand recovery, off by default) | OpenMDW-1.1 |
+| ONNX Runtime GPU (`onnxruntime-gpu`, optional, for RT-DETR) | MIT |
 | Gemini API (`gemini-3.5-flash`, fallbacks `gemini-flash-lite-latest`, `gemini-3.8-flash`; FORGE step + Studio) | Google API terms |
 | PyTorch, torchvision | BSD-3-Clause |
-| Hugging Face transformers, accelerate | Apache-2.0 |
+| Hugging Face transformers | Apache-2.0 |
 | OpenCV | Apache-2.0 |
 | PyAV (bundles FFmpeg with libx264/libx265) | BSD-3-Clause (PyAV); LGPL/GPL (FFmpeg components) |
 | NumPy, SciPy | BSD-3-Clause |
@@ -199,4 +238,4 @@ AI coding assistant: Claude Code was used to write code and docs; every team mem
 
 ## Team
 
-Khushi, Pranav Garg (and teammates).
+Khushi, Pranav Garg, Chintan Sood, Shareshth Garg.

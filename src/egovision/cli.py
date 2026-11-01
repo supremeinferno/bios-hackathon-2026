@@ -141,6 +141,36 @@ def sop(
     typer.echo(f"written to {out / 'sop'}/ and <clip>/steps_check.json")
 
 
+@app.command("sop-cycles")
+def sop_cycles(
+    out: Annotated[Path, typer.Option("--out", "-o", help="Output root with <clip>/result.json")] = Path("outputs"),
+    config: ConfigOpt = None,
+    set_: SetOpt = [],  # noqa: B006
+) -> None:
+    """Cycle consistency, labour cost and automation candidate indicator per task and step (not per person).
+
+    Wage: --set sop_cycles.wage.currency=INR --set sop_cycles.wage.rate_per_hour=<team-declared rate>.
+    """
+    from egovision.sop_cycles import run_sop_cycles
+
+    reps = run_sop_cycles(out, _load(config, set_, None).sop_cycles)
+    for src, r in reps.items():
+        a = r["actions"]
+        typer.echo(f"{src}: {len(r['clips_used'])} clips used, {len(r['clips_excluded'])} excluded; actions used "
+                   f"{a['used']}/{a['total']} (excluded {a['excluded_share']}); complete cycles {r['complete_cycles']}")
+        for g in r["groups"]:
+            if g["status"] != "ok":
+                typer.echo(f"  {g['group']} {len(g['clips'])} clip(s): insufficient data ({g['reason']})")
+                continue
+            lab = g["labour"]
+            cost = f"{lab['cost_per_cycle_median']} {r['wage']['currency']}" if r["wage"]["declared"] else "wage not declared"
+            typer.echo(f"  {g['group']}: anchor {g['anchor']['step']}, {g['complete_cycles']} cycles, score "
+                       f"{g['consistency_score']}, order distance {g['order_distance']['mean']}, cycle CV "
+                       f"{g['cycle_time']['cv']}, median cycle {g['cycle_time']['median_s']} s, cost/cycle {cost}, "
+                       f"task indicator: {g['indicator']}")
+    typer.echo(f"written to {out / 'sop'}/<source>_consistency.json and <source>_steps.csv")
+
+
 @app.command()
 def trim(
     clip: Annotated[str, typer.Option("--clip", help="Clip name (results in OUT/<clip>/)")],
