@@ -121,3 +121,44 @@ file storage was checked after every run: 0 files left.
    before the timeout fix (ERRORS #24–26, #29).
 
 Full list with fixes: [ERRORS_AND_FIXES.md](ERRORS_AND_FIXES.md).
+
+## 6. Cycle consistency, labour cost and automation candidate indicator (Stage 8 extension)
+
+`egovision sop-cycles` (egovision/sop_cycles.py, formula in DECISIONS D17). It describes **tasks and steps, not
+people**, and the indicator is a pattern hint, **not a decision to replace anyone**. Only Stage 7 `verified` actions
+count. Run on the existing `outputs/` (2026-11-01):
+
+| Source / task group | Clips used | Actions excluded | Complete cycles | Result |
+|---|---|---|---|---|
+| MTL-SGF00106/g1 (wood) | 5 of 10 | 69.5% | 14 | score 24.8, cycle CV 0.75, task: needs review |
+| MTL-SKL00089/g1 (aluminium profile) | 5 of 10 | 33.3% | 15 | score 18.3, cycle CV 0.84, task: keep manual |
+| MTL-SKL00089/g4 (tape) | 1 | 33.3% | 3 | score 23.0, task: needs review (one clip only) |
+| mytronlabs-000003/g1 (metal) | 10 | 44.7% | 7 | score 32.6, cycle CV 0.53, task: needs review |
+| mytronlabs-000060 (stone plant) | 9 | 90.9% | 0 | insufficient data |
+
+Other task groups (single clips) have fewer than 3 complete cycles: insufficient data. MTL-SKL00089 holds two
+different tasks (clips 005-008 battery packs, 011-023 aluminium profiles), so it is split into task groups.
+
+**Example: MTL-SKL00089/g1** (anchor `pick:aluminium profile`, median cycle 21.4 s, mean 33.0 s; mean order
+distance 0.63 ± 0.18; idle 10.4% of cycle time, unverified-only time 32.7%; labour 0.0059 h per cycle; wage not
+declared, so cost is null):
+
+| step | cycles | presence | median s | CV % | order distance | indicator | flags |
+|---|---|---|---|---|---|---|---|
+| pick:aluminium profile | 15 | 100% | 2.0 | 59.1 | 0.00 | keep manual (CV > 50%) | |
+| hold:aluminium profile | 9 | 60% | 3.9 | 81.6 | 0.00 | keep manual (CV > 50%) | |
+| place:aluminium profile | 6 | 40% | 1.5 | 82.2 | – | keep manual | name variant `place:tape dispenser` |
+| attach:end cap | 5 | 33% | 1.9 | 33.1 | – | keep manual (fine manipulation) | name variant `attach:plastic cap` |
+| insert:strip | 4 | 27% | 8.8 | 7.4 | – | needs review | name variants (`insert:led strip`, `insert:diffuser`, ...) |
+| inspect:aluminium profile | 3 | 20% | 2.3 | 47.3 | – | keep manual (judgement) | |
+
+**Caveats.**
+- Labels are automatic (Gemini flash-lite + Stage 7) and were compared only with our unverified draft labels.
+- Much of the variability is label noise: one object goes by several names (`end cap` / `plastic cap`,
+  `wood` / `wood frame` / `of wood`), which empties the templates (MTL-SGF00106/g1 keeps only `cut:wood`).
+  The `name_variants` and `label_noise` flags mark these steps.
+- 3-minute clips hold few complete cycles (0-6 per clip); partial cycles at the clip edges are never counted.
+  The anchor step's own period varies a lot (CV 0.53-0.84), so cycle boundaries are uncertain.
+- The wage is a team-declared assumption (`sop_cycles.wage`); none is declared, so all costs are null.
+- The indicator is not a replacement decision. No step reaches `candidate` on this data.
+

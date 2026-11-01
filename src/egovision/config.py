@@ -362,6 +362,61 @@ class SOPConfig(_Strict):
     ignore_verbs: list[str] = Field(default_factory=lambda: ["other"])
 
 
+class WageConfig(_Strict):
+    """Team-declared labour cost assumption. Never inferred: without it every cost field is null."""
+
+    currency: str | None = Field(None, description="e.g. INR, EUR. Required together with rate_per_hour.")
+    rate_per_hour: float | None = Field(None, gt=0, description="Fully loaded cost of one labour hour.")
+    note: str = "team-declared assumption, not measured"
+
+
+class SOPCyclesConfig(_Strict):
+    """Cycle consistency, labour cost and automation candidate indicator per task (egovision/sop_cycles.py).
+
+    Describes tasks and steps, never individual people. The indicator is not a recommendation to replace anyone.
+    """
+
+    statuses: list[str] = Field(default_factory=lambda: ["verified"],
+                                description="Stage 7 statuses that count; all others are excluded and reported.")
+    ignore_verbs: list[str] = Field(default_factory=lambda: ["other"], description="Never steps of a cycle.")
+    same_labeller_only: bool = Field(True, description="Use only clips labelled by the source's majority labeller "
+                                                       "(run.json steps_backend); others are listed as excluded.")
+    group_min_jaccard: float = Field(0.2, ge=0, le=1, description="Clips of one source whose step sets overlap at "
+                                                                  "least this much form one task group.")
+    groups: dict[str, list[list[str]]] = Field(default_factory=dict,
+                                               description="Override: {source: [[clip, ...], ...]} task groups.")
+    anchors: dict[str, str] = Field(default_factory=dict,
+                                    description="Override: {source or group id: 'verb:object'} cycle anchor step.")
+    anchor_exclude_verbs: list[str] = Field(default_factory=lambda: ["hold", "other", "wait", "walk"],
+                                            description="Background states, never a cycle start.")
+    min_anchor_clips: int = Field(2, ge=1, description="The anchor must repeat in at least this many clips.")
+    merge_gap_s: float = Field(2.0, ge=0, description="Same-step actions closer than this are one occurrence.")
+    min_cycles: int = Field(3, ge=2, description="Fewer complete cycles -> 'insufficient data', no score.")
+    min_cycle_step_share: float = Field(0.5, ge=0, le=1, description="A complete cycle contains at least this share "
+                                                                     "of the task template (drops sub-step loops).")
+    template_min_support: float = Field(0.5, gt=0, le=1, description="Template step = present in this share of cycles.")
+    w_order: float = Field(0.5, ge=0, description="Consistency score weight of step order (1 - order distance).")
+    w_timing: float = Field(0.5, ge=0, description="Consistency score weight of timing (1 - CV of cycle time / cap).")
+    cv_cap: float = Field(0.5, gt=0, description="Cycle-time CV at or above this gives a timing term of 0.")
+    automatable_verbs: list[str] = Field(
+        default_factory=lambda: ["pick", "place", "push", "carry"],
+        description="Repeatable gross motions typical of pick-and-place automation.")
+    manual_verbs: list[str] = Field(
+        default_factory=lambda: ["adjust", "inspect", "write", "attach", "fasten"],
+        description="Judgement or fine manipulation: kept manual by this indicator.")
+    candidate_min_presence: float = Field(0.8, ge=0, le=1, description="Step present in at least this share of cycles.")
+    candidate_max_cv: float = Field(0.25, ge=0, description="Step duration CV at most this.")
+    candidate_max_order_distance: float = Field(0.3, ge=0, le=1, description="Task mean order distance at most this.")
+    manual_min_cv: float = Field(0.5, ge=0, description="Step duration CV above this -> keep manual.")
+    task_candidate_min_score: float = Field(70.0, ge=0, le=100, description="Task: candidate needs this score ...")
+    task_min_time_share: float = Field(0.5, ge=0, le=1, description="... and candidate steps cover this share of "
+                                                                    "cycle time (keep manual: manual steps do).")
+    noise_iou: float = Field(0.5, gt=0, le=1, description="Overlap (IoU) of two differently labelled actions of the "
+                                                          "same hand that counts as a label conflict.")
+    noise_min_share: float = Field(0.3, gt=0, le=1, description="Share of a step's occurrences in conflict -> flag.")
+    wage: WageConfig = Field(default_factory=WageConfig)
+
+
 class TrimConfig(_Strict):
     """Stage 10 trim + compress (egovision/trim.py). Only after a reviewer approved the current plan.
 
@@ -422,6 +477,7 @@ class Config(_Strict):
     steps: StepsConfig = Field(default_factory=StepsConfig)
     verify: VerifyConfig = Field(default_factory=VerifyConfig)
     sop: SOPConfig = Field(default_factory=SOPConfig)
+    sop_cycles: SOPCyclesConfig = Field(default_factory=SOPCyclesConfig)
     trim: TrimConfig = Field(default_factory=TrimConfig)
     render: RenderConfig = Field(default_factory=RenderConfig)
 

@@ -50,6 +50,7 @@ The full 15-stage pipeline (FORGE) is in [docs/PIPELINE.md](docs/PIPELINE.md). S
 | 6 Validation | Schema, fixed 17-verb list, times clamped | Pydantic |
 | 7 Verification | Each action checked against hand presence, motion and contacts → verified / corrected / unverified / rejected | own code |
 | 8 Order + boundaries | Boundaries snapped to hand-motion valleys; per-source step template; missing / out-of-order / repeated flags | own code (DP / LCS) |
+| 8b Cycle consistency | Per task: complete cycles between anchor steps, order distance, timing CV, 0-100 score, labour cost at a team-declared wage, automation candidate indicator per step (tasks, not people) | own code (Levenshtein, LCS) |
 | 9 Review | Queue sorted by uncertainty; approve / edit / split / merge / reject; separate `review.json` layer | FastAPI + JS |
 | 10 Trim | After the reviewer approves the current plan: cut idle stretches (shorter video + time map) or keep them at 1 fps (same length); H.264 of the sanitized copy | PyAV, libx264 |
 | 11 Analytics | Time per verb, idle time, two-handed share, work zones, placements, cycles | own code |
@@ -88,6 +89,7 @@ egovision run --video data/raw/<clip>.mp4                    # one clip (add --m
 egovision run --video data/raw/<clip>.mp4 --set steps.backend=gemini   # + Gemini (sanitized copy only)
 egovision batch data/raw --skip-done                         # every clip; one failure does not stop the batch
 egovision sop                                                # step templates + missing/out-of-order flags
+egovision sop-cycles                                         # cycle consistency, labour cost, automation candidate indicator per task
 egovision eval                                               # score against labels/ (our own labels)
 egovision trim --clip <clip> --mode cut                      # after the trim plan is approved in review (or keep_lite)
 egovision ui                                                 # dashboard at http://127.0.0.1:8000
