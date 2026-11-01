@@ -10,11 +10,13 @@ Tick every line; nothing here contains data.
 |---|---|---|
 | Original clips | `data/raw/` | `rm -rf data/raw` |
 | Uploaded clips (dashboard) | `data/uploads/` | `rm -rf data/uploads` |
+| Studio uploads + H.264 previews | `data/videos/` | `rm -rf data/videos` |
+| Studio database (events, workers) | `data/studio.sqlite3*` | `rm -f data/studio.sqlite3*` |
 | Sanitized copies | `data/sanitized/` | `rm -rf data/sanitized` |
 | Trimmed copies | `data/trimmed/` | `rm -rf data/trimmed` |
 | Frame cache | `cache/frames/` | `rm -rf cache` |
 | API upload copies + responses | `cache/api/` | (included above) |
-| Pipeline outputs (hand tracks etc. are derived data) | `outputs*/` | `rm -rf outputs outputs_*` |
+| Pipeline + Studio outputs (hand tracks, reports, raw Gemini replies) | `outputs*/` | `rm -rf outputs outputs_*` |
 | Frames, contact sheets, demo renders | `artifacts/` | `rm -rf artifacts` |
 | Zip archives of the data | e.g. `data.zip` | `rm -f data.zip` |
 | Browser downloads of results / demo video | `~/Downloads/` | delete by hand |
@@ -29,6 +31,8 @@ Check nothing is left: `git status --ignored` should list no data folders.
   ```bash
   .venv/Scripts/python -c "from dotenv import dotenv_values; from google import genai; c=genai.Client(api_key=dotenv_values('.env')['GEMINI_API_KEY']); [c.files.delete(name=f.name) for f in c.files.list()]; print(len(list(c.files.list())))"
   ```
+- [ ] **Gemini (Studio):** the Studio sends frames inline with each request (no file uploads), so it leaves
+  nothing in Gemini file storage. Raw replies are only on disk under `outputs/videos/<id>/raw/` (covered above).
 - [ ] **Google Drive:** demo videos and slides were uploaded only to the organisers' shared folder.
   Remove any personal copies.
 - [ ] **Colab / Kaggle:** not used by this project. If anyone used them, delete notebooks' data and outputs.

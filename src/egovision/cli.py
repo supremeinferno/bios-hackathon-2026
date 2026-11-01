@@ -214,5 +214,40 @@ def ui(host: str = "127.0.0.1", port: int = 8000, verbose: bool = False) -> None
     uvicorn.run("egovision.api:app", host=host, port=port, log_level="info" if verbose else "warning")
 
 
+@app.command()
+def hands3d(video: Annotated[Path, typer.Option(help="Clip to process")],
+            out: Annotated[Path, typer.Option(help="Output folder")] = Path("outputs"),
+            config: ConfigOpt = None, set_: SetOpt = [],  # noqa: B006 - typer list option
+            max_seconds: MaxSecOpt = None, verbose: bool = False) -> None:
+    """Approximate 3D hands in camera (head) coordinates: <out>/<clip>/hands3d.jsonl + hands3d_summary.json.
+
+    Monocular and uncalibrated (assumed fisheye FOV `hands3d.hfov_deg`); see egovision/hands3d.py.
+    """
+    _setup_logging(verbose)
+    from egovision import hands3d as h3
+
+    cfg = Config.load(config, set_)
+    frames, summary = h3.compute(video, cfg, max_seconds=max_seconds)
+    path = h3.write(frames, summary, out / video.stem)
+    typer.echo(f"{path}: {summary['frames']} frames, {summary['frames_with_hand_pct']}% with a hand, "
+               f"median distance {summary['median_dist_m']} m (approximate)")
+
+
+@app.command()
+def studio(host: str = "127.0.0.1", port: int = 8010, verbose: bool = False) -> None:
+    """Start the Studio (upload a video, live Gemini analysis, worker analytics) at http://HOST:PORT.
+
+    Uses GEMINI_API_KEY from .env; without it, the offline FORGE labeller. Settings: STUDIO_* env vars
+    (egovision/studio/settings.py).
+    """
+    _setup_logging(verbose)
+    logging.getLogger("egovision").setLevel(logging.INFO)
+    import uvicorn
+
+    typer.echo(f"egovision studio -> http://{host}:{port}")
+    uvicorn.run("egovision.studio.api:create_app", factory=True, host=host, port=port,
+                log_level="info" if verbose else "warning")
+
+
 if __name__ == "__main__":
     app()

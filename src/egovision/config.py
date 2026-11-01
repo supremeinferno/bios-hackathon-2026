@@ -394,6 +394,20 @@ class RenderConfig(_Strict):
     draw_objects: bool = True
 
 
+class Hands3DConfig(_Strict):
+    """Monocular 3D hands in camera (head) coordinates (egovision/hands3d.py). Approximate: no intrinsics exist."""
+
+    hfov_deg: float = Field(150.0, gt=60, lt=220, description="Horizontal field of view of the fisheye lens; the "
+                                                             "clips have no intrinsics (DATA_REPORT: 150+ deg).")
+    stride: int = Field(2, ge=1, le=10, description="Run the hand model on every Nth frame (2 = 15 Hz at 30 fps).")
+    width: int = Field(960, ge=320, description="Processing width for the hand model (same as FORGE hands).")
+    max_fit_error_deg: float = Field(6.0, gt=0, description="Drop hands whose 3D fit misses the 2D keypoints by more.")
+    min_dist_m: float = Field(0.05, gt=0, description="Fits closer to the lens than this are rejected as degenerate.")
+    max_dist_m: float = Field(2.5, gt=0, description="Fits further away than this are rejected (not the wearer).")
+    smooth_window: int = Field(5, ge=1, le=15, description="Median window (detections) on each hand's position.")
+    max_gap_s: float = Field(0.35, gt=0, description="Neighbours further apart in time are not smoothed together.")
+
+
 class Config(_Strict):
     seed: int = 0
     device: Literal["auto", "cpu", "cuda"] = "auto"
@@ -402,6 +416,7 @@ class Config(_Strict):
     qc: QCConfig = Field(default_factory=QCConfig)
     signals: SignalsConfig = Field(default_factory=SignalsConfig)
     hands: HandsConfig = Field(default_factory=HandsConfig)
+    hands3d: Hands3DConfig = Field(default_factory=Hands3DConfig)
     objects: ObjectsConfig = Field(default_factory=ObjectsConfig)
     privacy: PrivacyConfig = Field(default_factory=PrivacyConfig)
     steps: StepsConfig = Field(default_factory=StepsConfig)

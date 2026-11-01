@@ -6,6 +6,12 @@
       "runtimeExecutable": ".venv/Scripts/egovision.exe",
       "runtimeArgs": ["ui", "--port", "8000"],
       "port": 8000
+    },
+    {
+      "name": "egovision-studio",
+      "runtimeExecutable": ".venv/Scripts/egovision.exe",
+      "runtimeArgs": ["studio", "--port", "8010"],
+      "port": 8010
     }
   ]
 }
